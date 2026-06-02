@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { createPrompt } from "@/lib/db";
 import {
   Download,
   Link2,
@@ -136,6 +137,40 @@ const DownloaderPage = () => {
       }
 
       setResult(data);
+
+      // Tự động lưu video vào cơ sở dữ liệu (Kho lưu trữ Video)
+      try {
+        const videoMetadata = {
+          id: data.id,
+          videoUrl: data.videoUrl,
+          thumbnailUrl: data.thumbnailUrl,
+          originUrl: data.originUrl,
+          platform: data.platform,
+          duration: data.duration,
+          creator: data.creator,
+        };
+        const finalNotes = JSON.stringify({ notes: "Đã tải qua SnapSave", videoMetadata });
+        
+        await createPrompt({
+          title: data.title || `Video SnapSave - ${data.creator}`,
+          content: "Tải xuống qua công cụ SnapSave Downloader",
+          negativePrompt: "",
+          type: "video",
+          model: "SnapSave",
+          lora: "",
+          seed: "",
+          sampler: "",
+          cfgScale: 0,
+          steps: 0,
+          creator: data.creator,
+          tags: ["SnapSave", data.platform],
+          notes: finalNotes,
+          isFavorite: false,
+        });
+      } catch (dbErr) {
+        console.error("Failed to automatically save video to database:", dbErr);
+      }
+
       setDownloadHistory((prev) => [
         data,
         ...prev.filter((item) => item.id !== data.id && item.videoUrl !== data.videoUrl),

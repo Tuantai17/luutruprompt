@@ -20,6 +20,7 @@ import {
   Heart,
   LogOut,
   Download,
+  Film,
 } from "lucide-react";
 
 const navItems = [
@@ -28,6 +29,7 @@ const navItems = [
   { href: "/prompts", icon: BookOpen, label: "Prompt Library" },
   { href: "/video-prompts", icon: Video, label: "Video Prompt" },
   { href: "/downloader", icon: Download, label: "SnapSave" },
+  { href: "/videos", icon: Film, label: "Lưu trữ Video" },
   { href: "/workflows", icon: Workflow, label: "Workflow" },
   { href: "/import", icon: FileUp, label: "Nhập dữ liệu" },
   { href: "/search", icon: Search, label: "Tìm kiếm" },
