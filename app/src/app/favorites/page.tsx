@@ -144,9 +144,13 @@ const FavImageCard = ({ image, onToggle }: { image: ImageRecord; onToggle: () =>
   useEffect(() => {
     const blob = image.thumbnailData || image.imageData;
     if (blob) {
-      const u = URL.createObjectURL(blob);
-      setUrl(u);
-      return () => URL.revokeObjectURL(u);
+      if (typeof blob === "string") {
+        setUrl(blob);
+      } else {
+        const u = URL.createObjectURL(blob);
+        setUrl(u);
+        return () => URL.revokeObjectURL(u);
+      }
     }
   }, [image]);
 

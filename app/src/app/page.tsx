@@ -410,9 +410,13 @@ const RecentImageCard = ({ image }: { image: ImageRecord }) => {
   useEffect(() => {
     const blob = image.thumbnailData || image.imageData;
     if (blob) {
-      const url = URL.createObjectURL(blob);
-      setThumbUrl(url);
-      return () => URL.revokeObjectURL(url);
+      if (typeof blob === "string") {
+        setThumbUrl(blob);
+      } else {
+        const url = URL.createObjectURL(blob);
+        setThumbUrl(url);
+        return () => URL.revokeObjectURL(url);
+      }
     }
   }, [image]);
 

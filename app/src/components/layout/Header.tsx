@@ -1,12 +1,14 @@
 "use client";
 
 import { useAppStore } from "@/lib/store";
+import { useAuth } from "@/components/layout/AuthProvider";
 import {
   Search,
   Menu,
   Upload,
   Bell,
   Plus,
+  LogOut,
 } from "lucide-react";
 
 const Header = () => {
@@ -17,6 +19,10 @@ const Header = () => {
     setSearchQuery,
     setUploadModalOpen,
   } = useAppStore();
+
+  const { user, signOut } = useAuth();
+  const firstLetter = user?.email ? user.email.charAt(0).toUpperCase() : "U";
+  const userPrefix = user?.email ? user.email.split("@")[0] : "User";
 
   return (
     <header
@@ -100,24 +106,54 @@ const Header = () => {
           <Bell size={18} />
         </button>
 
-        {/* Avatar */}
-        <div
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: "var(--radius-full)",
-            background: "var(--gradient-primary)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 14,
-            fontWeight: 600,
-            color: "white",
-            cursor: "pointer",
-            marginLeft: 4,
-          }}
-        >
-          A
+        {/* User Profile & Logout */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginLeft: "12px", borderLeft: "1px solid var(--border-primary)", paddingLeft: "12px" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100px" }} title={user?.email || ""}>
+              {userPrefix}
+            </span>
+            <button
+              onClick={() => signOut()}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--accent-pink)",
+                fontSize: 10,
+                fontWeight: 700,
+                cursor: "pointer",
+                padding: 0,
+                outline: "none",
+                textTransform: "uppercase",
+                letterSpacing: "0.02em",
+                display: "flex",
+                alignItems: "center",
+                gap: "2px",
+              }}
+              title="Đăng xuất tài khoản"
+            >
+              <LogOut size={10} /> Thoát
+            </button>
+          </div>
+
+          <div
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: "var(--radius-full)",
+              background: "var(--gradient-primary)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 14,
+              fontWeight: 700,
+              color: "white",
+              cursor: "default",
+              boxShadow: "0 0 10px rgba(139, 92, 246, 0.4)",
+            }}
+            title={user?.email || "User"}
+          >
+            {firstLetter}
+          </div>
         </div>
       </div>
     </header>

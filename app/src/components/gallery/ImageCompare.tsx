@@ -21,17 +21,25 @@ const ImageCompare = ({ imageA, imageB, onClose }: ImageCompareProps) => {
 
   useEffect(() => {
     if (imageA.imageData) {
-      const url = URL.createObjectURL(imageA.imageData);
-      setUrlA(url);
-      return () => URL.revokeObjectURL(url);
+      if (typeof imageA.imageData === "string") {
+        setUrlA(imageA.imageData);
+      } else {
+        const url = URL.createObjectURL(imageA.imageData);
+        setUrlA(url);
+        return () => URL.revokeObjectURL(url);
+      }
     }
   }, [imageA]);
 
   useEffect(() => {
     if (imageB.imageData) {
-      const url = URL.createObjectURL(imageB.imageData);
-      setUrlB(url);
-      return () => URL.revokeObjectURL(url);
+      if (typeof imageB.imageData === "string") {
+        setUrlB(imageB.imageData);
+      } else {
+        const url = URL.createObjectURL(imageB.imageData);
+        setUrlB(url);
+        return () => URL.revokeObjectURL(url);
+      }
     }
   }, [imageB]);
 

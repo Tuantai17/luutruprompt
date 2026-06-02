@@ -73,9 +73,13 @@ const Lightbox = ({ images, currentId, onClose, onDelete, onUpdate }: LightboxPr
 
   useEffect(() => {
     if (currentImage?.imageData) {
-      const url = URL.createObjectURL(currentImage.imageData);
-      setImageUrl(url);
-      return () => URL.revokeObjectURL(url);
+      if (typeof currentImage.imageData === "string") {
+        setImageUrl(currentImage.imageData);
+      } else {
+        const url = URL.createObjectURL(currentImage.imageData);
+        setImageUrl(url);
+        return () => URL.revokeObjectURL(url);
+      }
     }
   }, [currentImage]);
 

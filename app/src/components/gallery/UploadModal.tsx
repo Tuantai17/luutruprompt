@@ -24,6 +24,9 @@ interface UploadModalProps {
 const UploadModal = ({ open, onClose, onComplete }: UploadModalProps) => {
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [imageUrlInput, setImageUrlInput] = useState("");
+  const [fetchingUrl, setFetchingUrl] = useState(false);
+  const [urlError, setUrlError] = useState("");
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const newFiles: UploadFile[] = acceptedFiles.map((file) => ({
@@ -57,6 +60,66 @@ const UploadModal = ({ open, onClose, onComplete }: UploadModalProps) => {
       return updatedList;
     });
   }, []);
+
+  const handleDownloadFromUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = imageUrlInput.trim();
+    if (!trimmed) return;
+
+    setFetchingUrl(true);
+    setUrlError("");
+
+    try {
+      const response = await fetch(`/api/proxy-image?url=${encodeURIComponent(trimmed)}`);
+      if (!response.ok) {
+        throw new Error("Không thể tải ảnh từ URL này. Vui lòng thử URL khác.");
+      }
+
+      const blob = await response.blob();
+      const contentType = blob.type || "image/jpeg";
+      const extension = contentType.split("/")[1] || "jpg";
+      
+      let filename = "url-image-" + Date.now();
+      try {
+        const urlObj = new URL(trimmed);
+        const pathname = urlObj.pathname;
+        const base = pathname.substring(pathname.lastIndexOf("/") + 1);
+        if (base && base.includes(".")) {
+          filename = base.split(".")[0];
+        }
+      } catch {}
+
+      const file = new File([blob], `${filename}.${extension}`, { type: contentType });
+      
+      const fileObj: UploadFile = {
+        file,
+        preview: URL.createObjectURL(file),
+        status: "pending" as const,
+        title: filename,
+      };
+
+      setFiles((prev) => [...prev, fileObj]);
+      setImageUrlInput("");
+
+      // Extract metadata
+      extractMetadata(file).then((meta) => {
+        if (meta && Object.keys(meta).length > 0) {
+          setFiles((currentFiles) => {
+            return currentFiles.map((f) => {
+              if (f.file.name === file.name && f.file.size === file.size) {
+                return { ...f, metadata: meta };
+              }
+              return f;
+            });
+          });
+        }
+      });
+    } catch (err: any) {
+      setUrlError(err.message || "Có lỗi xảy ra khi tải ảnh.");
+    } finally {
+      setFetchingUrl(false);
+    }
+  };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -230,6 +293,86 @@ const UploadModal = ({ open, onClose, onComplete }: UploadModalProps) => {
               </p>
             </div>
           </div>
+
+          {/* OR Divider */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              margin: "16px 0",
+              color: "var(--text-muted)",
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            <div style={{ flex: 1, height: "1px", background: "var(--border-primary)" }} />
+            <span>HOẶC NHẬP URL HÌNH ẢNH</span>
+            <div style={{ flex: 1, height: "1px", background: "var(--border-primary)" }} />
+          </div>
+
+          {/* URL Input Form */}
+          <form
+            onSubmit={handleDownloadFromUrl}
+            style={{
+              display: "flex",
+              gap: 8,
+              marginBottom: files.length > 0 || urlError ? 12 : 0,
+            }}
+          >
+            <input
+              type="text"
+              value={imageUrlInput}
+              onChange={(e) => setImageUrlInput(e.target.value)}
+              placeholder="Dán địa chỉ hình ảnh (URL) vào đây..."
+              className="input-field"
+              style={{
+                flex: 1,
+                height: 40,
+                fontSize: 13,
+              }}
+              disabled={fetchingUrl || uploading}
+            />
+            <button
+              type="submit"
+              className="btn-primary"
+              style={{
+                height: 40,
+                padding: "0 16px",
+                whiteSpace: "nowrap",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                minWidth: 100,
+                justifyContent: "center",
+              }}
+              disabled={fetchingUrl || !imageUrlInput.trim() || uploading}
+            >
+              {fetchingUrl ? (
+                <>
+                  <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />
+                  Đang tải...
+                </>
+              ) : (
+                "Tải xuống"
+              )}
+            </button>
+          </form>
+
+          {urlError && (
+            <p
+              style={{
+                fontSize: 12,
+                color: "var(--accent-red)",
+                marginTop: 0,
+                marginBottom: files.length > 0 ? 20 : 0,
+                fontWeight: 500,
+              }}
+            >
+              ⚠️ {urlError}
+            </p>
+          )}
 
           {/* File list */}
           {files.length > 0 && (
