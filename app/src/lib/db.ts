@@ -590,12 +590,42 @@ export const deletePrompt = async (id: string): Promise<void> => {
   const userId = await getUserId();
   if (!userId) return;
 
-  const { error } = await supabase
+  // Lấy thông tin prompt để kiểm tra xem có phải video không
+  const { data, error: fetchError } = await supabase
     .from("prompts")
-    .delete()
+    .select("type")
     .eq("user_id", userId)
     .eq("id", id);
-  if (error) throw error;
+
+  const prompt = data && data.length > 0 ? data[0] : null;
+
+  if (!fetchError && prompt && prompt.type === "video") {
+    // Nếu là video, gọi API Route để xử lý xóa trên Cloudinary + Database
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+
+    const res = await fetch("/api/video/delete", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ id }),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || "Không thể xóa video qua API.");
+    }
+  } else {
+    // Nếu không phải video, thực hiện xóa trực tiếp trong Database từ Client
+    const { error } = await supabase
+      .from("prompts")
+      .delete()
+      .eq("user_id", userId)
+      .eq("id", id);
+    if (error) throw error;
+  }
 };
 
 export const getAllPrompts = async (): Promise<Prompt[]> => {

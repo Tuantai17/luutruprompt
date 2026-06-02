@@ -22,3 +22,11 @@ app/.env*.local
 # OS files
 .DS_Store
 Thumbs.db
+
+# Google Credentials
+app/luutrulink-*.json
+luutrulink-*.json
+*.json
+!app/package.json
+!app/package-lock.json
+!app/tsconfig.json
