@@ -247,9 +247,9 @@ const GalleryPage = () => {
         </div>
       ) : (
         <div
+          className="gallery-grid"
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
             gap: 16,
           }}
         >
@@ -412,7 +412,7 @@ const ImageCard = ({
 
   return (
     <div
-      className="glass-card animate-fadeIn"
+      className="glass-card gallery-image-card animate-fadeIn"
       style={{
         opacity: 0,
         overflow: "hidden",
@@ -546,7 +546,7 @@ const ImageCard = ({
       </div>
 
       {/* Info Container with Prompt and Quick Copy */}
-      <div style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+      <div className="gallery-card-info" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div
             style={{

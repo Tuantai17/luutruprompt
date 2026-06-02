@@ -19,6 +19,7 @@ import {
   Sparkles,
   Heart,
   LogOut,
+  Download,
 } from "lucide-react";
 
 const navItems = [
@@ -26,6 +27,7 @@ const navItems = [
   { href: "/gallery", icon: Images, label: "Thư viện ảnh" },
   { href: "/prompts", icon: BookOpen, label: "Prompt Library" },
   { href: "/video-prompts", icon: Video, label: "Video Prompt" },
+  { href: "/downloader", icon: Download, label: "SnapSave" },
   { href: "/workflows", icon: Workflow, label: "Workflow" },
   { href: "/import", icon: FileUp, label: "Nhập dữ liệu" },
   { href: "/search", icon: Search, label: "Tìm kiếm" },
