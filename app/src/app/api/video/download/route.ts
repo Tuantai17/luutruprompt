@@ -1,9 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 // Lấy thông tin Supabase credentials từ môi trường
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
+
+// Lấy thông tin Cloudflare R2 credentials từ môi trường
+const r2AccountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID;
+const r2AccessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID;
+const r2SecretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY;
+const r2BucketName = process.env.CLOUDFLARE_R2_BUCKET_NAME;
+const r2PublicUrl = process.env.NEXT_PUBLIC_CLOUDFLARE_R2_PUBLIC_URL || "";
+
+const isR2Configured = !!(r2AccountId && r2AccessKeyId && r2SecretAccessKey && r2BucketName && r2PublicUrl);
+
+let s3Client: S3Client | null = null;
+if (isR2Configured) {
+  s3Client = new S3Client({
+    region: "auto",
+    endpoint: `https://${r2AccountId}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: r2AccessKeyId!,
+      secretAccessKey: r2SecretAccessKey!,
+    },
+  });
+}
+
+// Hàm upload buffer lên Cloudflare R2
+async function uploadToR2(key: string, buffer: ArrayBuffer | Buffer, contentType: string): Promise<string> {
+  if (!s3Client || !r2BucketName) {
+    throw new Error("R2 Client is not configured");
+  }
+  const uploadBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as ArrayBuffer);
+  const command = new PutObjectCommand({
+    Bucket: r2BucketName,
+    Key: key,
+    Body: uploadBuffer,
+    ContentType: contentType,
+  });
+  await s3Client.send(command);
+  const cleanPublicUrl = r2PublicUrl.endsWith("/") ? r2PublicUrl.slice(0, -1) : r2PublicUrl;
+  return `${cleanPublicUrl}/${key}`;
+}
 
 // Hàm xác định loại nền tảng dựa trên URL
 function getPlatform(url: string): string {
@@ -173,31 +212,53 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 5. Upload video lên Supabase Storage bucket 'images' vào thư mục 'videos/[userId]/[uuid].mp4'
+    // 5. Upload video lên Storage (Ưu tiên Cloudflare R2, fallback về Supabase Storage)
     const videoId = crypto.randomUUID();
     const videoPath = `videos/${userId}/${videoId}.mp4`;
     
-    console.log("Đang upload video lên Supabase Storage:", videoPath);
-    const { error: videoUploadError } = await serverSupabase.storage
-      .from("images")
-      .upload(videoPath, videoBuffer, {
-        contentType: "video/mp4",
-        upsert: true,
-      });
+    let savedVideoUrl = "";
+    
+    if (isR2Configured) {
+      try {
+        console.log("Đang upload video lên Cloudflare R2:", videoPath);
+        savedVideoUrl = await uploadToR2(videoPath, videoBuffer, "video/mp4");
+      } catch (r2Err: any) {
+        console.error("R2 Upload Error, falling back to Supabase:", r2Err);
+        // Fallback to Supabase
+        const { error: videoUploadError } = await serverSupabase.storage
+          .from("images")
+          .upload(videoPath, videoBuffer, {
+            contentType: "video/mp4",
+            upsert: true,
+          });
+        if (videoUploadError) throw videoUploadError;
+        const { data: videoUrlData } = serverSupabase.storage
+          .from("images")
+          .getPublicUrl(videoPath);
+        savedVideoUrl = videoUrlData.publicUrl;
+      }
+    } else {
+      console.log("Đang upload video lên Supabase Storage (mặc định):", videoPath);
+      const { error: videoUploadError } = await serverSupabase.storage
+        .from("images")
+        .upload(videoPath, videoBuffer, {
+          contentType: "video/mp4",
+          upsert: true,
+        });
 
-    if (videoUploadError) {
-      console.error("Storage Video Upload Error:", videoUploadError);
-      return NextResponse.json(
-        { error: `Lỗi upload video lên Cloud: ${videoUploadError.message}` },
-        { status: 500 }
-      );
+      if (videoUploadError) {
+        console.error("Storage Video Upload Error:", videoUploadError);
+        return NextResponse.json(
+          { error: `Lỗi upload video lên Cloud: ${videoUploadError.message}` },
+          { status: 500 }
+        );
+      }
+
+      const { data: videoUrlData } = serverSupabase.storage
+        .from("images")
+        .getPublicUrl(videoPath);
+      savedVideoUrl = videoUrlData.publicUrl;
     }
-
-    // Lấy link public của video vừa upload
-    const { data: videoUrlData } = serverSupabase.storage
-      .from("images")
-      .getPublicUrl(videoPath);
-    const savedVideoUrl = videoUrlData.publicUrl;
 
     // 6. Xử lý tải Thumbnail và upload lên Storage (nếu có thumbnail từ API gốc)
     let savedThumbnailUrl = "";
@@ -209,19 +270,40 @@ export async function POST(request: NextRequest) {
           const thumbBuffer = await thumbResponse.arrayBuffer();
           const thumbPath = `videos/${userId}/thumbs/${videoId}.jpg`;
 
-          console.log("Upload thumbnail lên Storage:", thumbPath);
-          const { error: thumbError } = await serverSupabase.storage
-            .from("images")
-            .upload(thumbPath, thumbBuffer, {
-              contentType: "image/jpeg",
-              upsert: true,
-            });
-
-          if (!thumbError) {
-            const { data: thumbUrlData } = serverSupabase.storage
+          if (isR2Configured) {
+            try {
+              console.log("Upload thumbnail lên Cloudflare R2:", thumbPath);
+              savedThumbnailUrl = await uploadToR2(thumbPath, thumbBuffer, "image/jpeg");
+            } catch (r2ThumbErr) {
+              console.error("R2 Thumbnail Upload Error, falling back to Supabase:", r2ThumbErr);
+              const { error: thumbError } = await serverSupabase.storage
+                .from("images")
+                .upload(thumbPath, thumbBuffer, {
+                  contentType: "image/jpeg",
+                  upsert: true,
+                });
+              if (!thumbError) {
+                const { data: thumbUrlData } = serverSupabase.storage
+                  .from("images")
+                  .getPublicUrl(thumbPath);
+                savedThumbnailUrl = thumbUrlData.publicUrl;
+              }
+            }
+          } else {
+            console.log("Upload thumbnail lên Supabase Storage:", thumbPath);
+            const { error: thumbError } = await serverSupabase.storage
               .from("images")
-              .getPublicUrl(thumbPath);
-            savedThumbnailUrl = thumbUrlData.publicUrl;
+              .upload(thumbPath, thumbBuffer, {
+                contentType: "image/jpeg",
+                upsert: true,
+              });
+
+            if (!thumbError) {
+              const { data: thumbUrlData } = serverSupabase.storage
+                .from("images")
+                .getPublicUrl(thumbPath);
+              savedThumbnailUrl = thumbUrlData.publicUrl;
+            }
           }
         }
       } catch (thumbErr) {

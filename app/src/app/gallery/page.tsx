@@ -25,6 +25,7 @@ import ImageCompare from "@/components/gallery/ImageCompare";
 const GalleryPage = () => {
   const [images, setImages] = useState<ImageRecord[]>([]);
   const [mounted, setMounted] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [lightboxId, setLightboxId] = useState<string | null>(null);
 
   // --- Compare Mode States ---
@@ -48,6 +49,16 @@ const GalleryPage = () => {
     setMounted(true);
     loadImages();
   }, [loadImages]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 640px)");
+    const syncViewport = () => setIsMobileViewport(mediaQuery.matches);
+
+    syncViewport();
+    mediaQuery.addEventListener("change", syncViewport);
+
+    return () => mediaQuery.removeEventListener("change", syncViewport);
+  }, []);
 
   const handleDelete = async (id: string) => {
     await deleteImage(id);
@@ -82,6 +93,8 @@ const GalleryPage = () => {
     setSelectedCompareIds([]);
   };
 
+  const effectiveGalleryView = isMobileViewport ? "grid" : galleryView;
+
   if (!mounted) return null;
 
   return (
@@ -108,52 +121,54 @@ const GalleryPage = () => {
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {/* View toggle */}
-          <div
-            style={{
-              display: "flex",
-              background: "var(--bg-tertiary)",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--border-primary)",
-              overflow: "hidden",
-            }}
-          >
-            <button
-              onClick={() => setGalleryView("masonry")}
-              className="btn-icon"
+          {!isMobileViewport && (
+            <div
               style={{
-                borderRadius: 0,
-                background:
-                  galleryView === "masonry"
-                    ? "rgba(139,92,246,0.15)"
-                    : "transparent",
-                color:
-                  galleryView === "masonry"
-                    ? "var(--accent-purple)"
-                    : "var(--text-muted)",
+                display: "flex",
+                background: "var(--bg-tertiary)",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-primary)",
+                overflow: "hidden",
               }}
-              title="Masonry"
             >
-              <LayoutGrid size={16} />
-            </button>
-            <button
-              onClick={() => setGalleryView("grid")}
-              className="btn-icon"
-              style={{
-                borderRadius: 0,
-                background:
-                  galleryView === "grid"
-                    ? "rgba(139,92,246,0.15)"
-                    : "transparent",
-                color:
-                  galleryView === "grid"
-                    ? "var(--accent-purple)"
-                    : "var(--text-muted)",
-              }}
-              title="Grid"
-            >
-              <Grid3X3 size={16} />
-            </button>
-          </div>
+              <button
+                onClick={() => setGalleryView("masonry")}
+                className="btn-icon"
+                style={{
+                  borderRadius: 0,
+                  background:
+                    galleryView === "masonry"
+                      ? "rgba(139,92,246,0.15)"
+                      : "transparent",
+                  color:
+                    galleryView === "masonry"
+                      ? "var(--accent-purple)"
+                      : "var(--text-muted)",
+                }}
+                title="Masonry"
+              >
+                <LayoutGrid size={16} />
+              </button>
+              <button
+                onClick={() => setGalleryView("grid")}
+                className="btn-icon"
+                style={{
+                  borderRadius: 0,
+                  background:
+                    galleryView === "grid"
+                      ? "rgba(139,92,246,0.15)"
+                      : "transparent",
+                  color:
+                    galleryView === "grid"
+                      ? "var(--accent-purple)"
+                      : "var(--text-muted)",
+                }}
+                title="Grid"
+              >
+                <Grid3X3 size={16} />
+              </button>
+            </div>
+          )}
 
           {/* Compare trigger button */}
           <button
@@ -230,7 +245,7 @@ const GalleryPage = () => {
             Tải ảnh đầu tiên
           </button>
         </div>
-      ) : galleryView === "masonry" ? (
+      ) : effectiveGalleryView === "masonry" ? (
         <div className="masonry-grid">
           {images.map((img, idx) => (
             <ImageCard
