@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
   Download,
   Link2,
   RefreshCw,
-  Film,
   Play,
   X,
   User,
@@ -19,9 +18,6 @@ import {
   Globe,
   Zap,
   Shield,
-  Video,
-  Music,
-  Image as ImageIcon,
 } from "lucide-react";
 
 // Danh sách nền tảng hỗ trợ
@@ -44,14 +40,64 @@ interface DownloadResult {
   duration: number;
 }
 
+const DOWNLOAD_HISTORY_STORAGE_KEY = "promptvault.snapSave.downloadHistory";
+const MAX_DOWNLOAD_HISTORY = 10;
+
+const isDownloadResult = (value: unknown): value is DownloadResult => {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<DownloadResult>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.title === "string" &&
+    typeof item.videoUrl === "string" &&
+    typeof item.thumbnailUrl === "string" &&
+    typeof item.originUrl === "string" &&
+    typeof item.creator === "string" &&
+    typeof item.platform === "string" &&
+    typeof item.duration === "number"
+  );
+};
+
+const readStoredDownloadHistory = (): DownloadResult[] => {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const savedHistory = window.localStorage.getItem(DOWNLOAD_HISTORY_STORAGE_KEY);
+    if (!savedHistory) return [];
+
+    const parsedHistory = JSON.parse(savedHistory);
+    if (!Array.isArray(parsedHistory)) return [];
+
+    return parsedHistory.filter(isDownloadResult).slice(0, MAX_DOWNLOAD_HISTORY);
+  } catch {
+    window.localStorage.removeItem(DOWNLOAD_HISTORY_STORAGE_KEY);
+    return [];
+  }
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  return error instanceof Error ? error.message : fallback;
+};
+
 const DownloaderPage = () => {
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<DownloadResult | null>(null);
   const [error, setError] = useState("");
-  const [downloadHistory, setDownloadHistory] = useState<DownloadResult[]>([]);
+  const [downloadHistory, setDownloadHistory] = useState<DownloadResult[]>(readStoredDownloadHistory);
   const [lightboxVideo, setLightboxVideo] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        DOWNLOAD_HISTORY_STORAGE_KEY,
+        JSON.stringify(downloadHistory.slice(0, MAX_DOWNLOAD_HISTORY)),
+      );
+    } catch {
+      // Browser storage may be disabled or full.
+    }
+  }, [downloadHistory]);
 
   // Dán link từ clipboard
   const handlePaste = async () => {
@@ -90,9 +136,12 @@ const DownloaderPage = () => {
       }
 
       setResult(data);
-      setDownloadHistory((prev) => [data, ...prev].slice(0, 10));
-    } catch (err: any) {
-      setError(err.message || "Đã xảy ra lỗi khi tải video.");
+      setDownloadHistory((prev) => [
+        data,
+        ...prev.filter((item) => item.id !== data.id && item.videoUrl !== data.videoUrl),
+      ].slice(0, MAX_DOWNLOAD_HISTORY));
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Đã xảy ra lỗi khi tải video."));
     } finally {
       setIsLoading(false);
     }
@@ -531,7 +580,7 @@ const DownloaderPage = () => {
             }}
           >
             <Clock size={16} style={{ color: "var(--accent-purple)" }} />
-            Lịch sử tải gần đây (phiên hiện tại)
+            Lịch sử tải gần đây
           </h2>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -609,19 +658,32 @@ const DownloaderPage = () => {
                   </div>
                 </div>
 
-                {/* Quick Download */}
-                <a
-                  href={item.videoUrl}
-                  download
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn-icon"
-                  style={{ color: "var(--accent-pink)", flexShrink: 0 }}
-                  onClick={(e) => e.stopPropagation()}
-                  title="Tải về máy"
-                >
-                  <Download size={16} />
-                </a>
+                {/* Quick Actions */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <a
+                    href={item.videoUrl}
+                    download={`${item.platform}_${item.id}.mp4`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-icon"
+                    style={{ color: "var(--accent-pink)", flexShrink: 0 }}
+                    onClick={(e) => e.stopPropagation()}
+                    title="Tải về máy"
+                  >
+                    <Download size={16} />
+                  </a>
+                  <a
+                    href={item.originUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-icon"
+                    style={{ color: "var(--accent-cyan)", flexShrink: 0 }}
+                    onClick={(e) => e.stopPropagation()}
+                    title="Xem gốc"
+                  >
+                    <ExternalLink size={15} />
+                  </a>
+                </div>
               </div>
             ))}
           </div>

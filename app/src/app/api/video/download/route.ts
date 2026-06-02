@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { v2 as cloudinary } from "cloudinary";
 
 // Lấy thông tin Supabase credentials từ môi trường
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
@@ -14,6 +15,21 @@ const r2BucketName = process.env.CLOUDFLARE_R2_BUCKET_NAME;
 const r2PublicUrl = process.env.NEXT_PUBLIC_CLOUDFLARE_R2_PUBLIC_URL || "";
 
 const isR2Configured = !!(r2AccountId && r2AccessKeyId && r2SecretAccessKey && r2BucketName && r2PublicUrl);
+
+// Lấy thông tin Cloudinary credentials từ môi trường
+const cloudinaryCloudName = process.env.CLOUDINARY_CLOUD_NAME;
+const cloudinaryApiKey = process.env.CLOUDINARY_API_KEY;
+const cloudinaryApiSecret = process.env.CLOUDINARY_API_SECRET;
+
+const isCloudinaryConfigured = !!(cloudinaryCloudName && cloudinaryApiKey && cloudinaryApiSecret);
+
+if (isCloudinaryConfigured) {
+  cloudinary.config({
+    cloud_name: cloudinaryCloudName,
+    api_key: cloudinaryApiKey,
+    api_secret: cloudinaryApiSecret,
+  });
+}
 
 let s3Client: S3Client | null = null;
 if (isR2Configured) {
@@ -42,6 +58,28 @@ async function uploadToR2(key: string, buffer: ArrayBuffer | Buffer, contentType
   await s3Client.send(command);
   const cleanPublicUrl = r2PublicUrl.endsWith("/") ? r2PublicUrl.slice(0, -1) : r2PublicUrl;
   return `${cleanPublicUrl}/${key}`;
+}
+
+// Hàm upload buffer lên Cloudinary
+async function uploadToCloudinary(buffer: ArrayBuffer | Buffer, folder: string, resourceType: "video" | "image"): Promise<string> {
+  if (!isCloudinaryConfigured) {
+    throw new Error("Cloudinary is not configured");
+  }
+  const uploadBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as ArrayBuffer);
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: folder,
+        resource_type: resourceType,
+      },
+      (error, result) => {
+        if (error) return reject(error);
+        if (!result) return reject(new Error("Upload result is undefined"));
+        resolve(result.secure_url);
+      }
+    );
+    uploadStream.end(uploadBuffer);
+  });
 }
 
 // Hàm xác định loại nền tảng dựa trên URL
@@ -212,13 +250,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 5. Upload video lên Storage (Ưu tiên Cloudflare R2, fallback về Supabase Storage)
+    // 5. Upload video lên Storage (Ưu tiên Cloudinary, tiếp đến Cloudflare R2, và mặc định Supabase Storage)
     const videoId = crypto.randomUUID();
     const videoPath = `videos/${userId}/${videoId}.mp4`;
     
     let savedVideoUrl = "";
     
-    if (isR2Configured) {
+    if (isCloudinaryConfigured) {
+      try {
+        console.log("Đang upload video lên Cloudinary...");
+        savedVideoUrl = await uploadToCloudinary(videoBuffer, `videos/${userId}`, "video");
+      } catch (cloudinaryErr: any) {
+        console.error("Cloudinary video upload failed, falling back to Supabase:", cloudinaryErr);
+        // Fallback to Supabase
+        const { error: videoUploadError } = await serverSupabase.storage
+          .from("images")
+          .upload(videoPath, videoBuffer, {
+            contentType: "video/mp4",
+            upsert: true,
+          });
+        if (videoUploadError) throw videoUploadError;
+        const { data: videoUrlData } = serverSupabase.storage
+          .from("images")
+          .getPublicUrl(videoPath);
+        savedVideoUrl = videoUrlData.publicUrl;
+      }
+    } else if (isR2Configured) {
       try {
         console.log("Đang upload video lên Cloudflare R2:", videoPath);
         savedVideoUrl = await uploadToR2(videoPath, videoBuffer, "video/mp4");
@@ -270,7 +327,26 @@ export async function POST(request: NextRequest) {
           const thumbBuffer = await thumbResponse.arrayBuffer();
           const thumbPath = `videos/${userId}/thumbs/${videoId}.jpg`;
 
-          if (isR2Configured) {
+          if (isCloudinaryConfigured) {
+            try {
+              console.log("Upload thumbnail lên Cloudinary...");
+              savedThumbnailUrl = await uploadToCloudinary(thumbBuffer, `videos/${userId}/thumbs`, "image");
+            } catch (cloudinaryThumbErr) {
+              console.error("Cloudinary thumbnail upload failed, falling back to Supabase:", cloudinaryThumbErr);
+              const { error: thumbError } = await serverSupabase.storage
+                .from("images")
+                .upload(thumbPath, thumbBuffer, {
+                  contentType: "image/jpeg",
+                  upsert: true,
+                });
+              if (!thumbError) {
+                const { data: thumbUrlData } = serverSupabase.storage
+                  .from("images")
+                  .getPublicUrl(thumbPath);
+                savedThumbnailUrl = thumbUrlData.publicUrl;
+              }
+            }
+          } else if (isR2Configured) {
             try {
               console.log("Upload thumbnail lên Cloudflare R2:", thumbPath);
               savedThumbnailUrl = await uploadToR2(thumbPath, thumbBuffer, "image/jpeg");
