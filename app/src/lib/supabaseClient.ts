@@ -1,10 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+// Sử dụng fallback URL hợp lệ để tránh lỗi crash khi build tĩnh trên Vercel nếu chưa cấu hình Env
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("⚠️ [Supabase] URL hoặc Anon Key đang bị trống! Hãy chắc chắn bạn đã tạo file .env.local và KHỞI ĐỘNG LẠI Next.js dev server (npm run dev).");
+if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+  console.warn("⚠️ [Supabase] URL hoặc Anon Key đang bị trống! Hãy chắc chắn bạn đã cấu hình Environment Variables trên Vercel hoặc file .env.local.");
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
