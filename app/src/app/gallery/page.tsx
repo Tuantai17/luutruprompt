@@ -558,6 +558,7 @@ const ImageCard = ({
           >
             {image.title || "Untitled"}
           </div>
+        </div>
           
         {/* Prompt Section */}
         {image.prompt && (
