@@ -45,8 +45,7 @@ const Header = () => {
         {/* Mobile menu button */}
         <button
           onClick={toggleSidebar}
-          className="btn-icon"
-          style={{ display: sidebarOpen ? "none" : "flex" }}
+          className="btn-icon mobile-menu-btn"
           title="Menu"
         >
           <Menu size={20} />

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAppStore } from "@/lib/store";
@@ -32,7 +33,21 @@ const navItems = [
 
 const Sidebar = () => {
   const pathname = usePathname();
-  const { sidebarOpen, toggleSidebar } = useAppStore();
+  const { sidebarOpen, toggleSidebar, setSidebarOpen } = useAppStore();
+
+  useEffect(() => {
+    // Thu gọn sidebar khi ở màn hình mobile lúc mới load
+    if (typeof window !== "undefined" && window.innerWidth <= 768) {
+      setSidebarOpen(false);
+    }
+  }, [setSidebarOpen]);
+
+  // Tự động thu gọn sidebar trên mobile khi chuyển trang
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth <= 768) {
+      setSidebarOpen(false);
+    }
+  }, [pathname, setSidebarOpen]);
 
   return (
     <>
@@ -42,7 +57,6 @@ const Sidebar = () => {
           className="sidebar-mobile-overlay"
           onClick={toggleSidebar}
           style={{
-            display: "none",
             position: "fixed",
             inset: 0,
             background: "rgba(0,0,0,0.5)",
@@ -52,7 +66,7 @@ const Sidebar = () => {
       )}
 
       <aside
-        className={`sidebar ${!sidebarOpen ? "sidebar-collapsed" : ""}`}
+        className={`sidebar ${!sidebarOpen ? "sidebar-collapsed" : ""} ${sidebarOpen ? "sidebar-mobile-open" : ""}`}
         style={{ width: sidebarOpen ? "var(--sidebar-width)" : "var(--sidebar-collapsed)" }}
       >
         {/* Logo */}
