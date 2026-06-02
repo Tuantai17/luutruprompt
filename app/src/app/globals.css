@@ -643,6 +643,7 @@ body {
 /* ===== Custom Mobile Menu & Sidebar Drawer ===== */
 .mobile-menu-btn {
   display: flex !important;
+  flex-shrink: 0 !important;
 }
 
 .sidebar-mobile-overlay {
@@ -657,3 +658,43 @@ body {
     display: none !important;
   }
 }
+
+/* Custom Header Mobile Responsive */
+.header-hide-mobile {
+  display: inline-flex;
+}
+
+.btn-upload-text {
+  display: inline;
+}
+
+.user-text-container {
+  display: flex;
+}
+
+@media (max-width: 768px) {
+  .header-hide-mobile {
+    display: none !important;
+  }
+  
+  .btn-upload-text {
+    display: none !important;
+  }
+  
+  .user-text-container {
+    display: none !important;
+  }
+  
+  .header-search-container {
+    width: 160px !important;
+    max-width: 35vw !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .header-search-container {
+    width: 110px !important;
+    max-width: 28vw !important;
+  }
+}
+

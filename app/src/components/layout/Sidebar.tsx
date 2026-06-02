@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAppStore } from "@/lib/store";
+import { useAuth } from "@/components/layout/AuthProvider";
 import {
   LayoutDashboard,
   Images,
@@ -17,6 +18,7 @@ import {
   ChevronRight,
   Sparkles,
   Heart,
+  LogOut,
 } from "lucide-react";
 
 const navItems = [
@@ -34,6 +36,10 @@ const navItems = [
 const Sidebar = () => {
   const pathname = usePathname();
   const { sidebarOpen, toggleSidebar, setSidebarOpen } = useAppStore();
+  const { user, signOut } = useAuth();
+
+  const firstLetter = user?.email ? user.email.charAt(0).toUpperCase() : "U";
+  const userPrefix = user?.email ? user.email.split("@")[0] : "User";
 
   useEffect(() => {
     // Thu gọn sidebar khi ở màn hình mobile lúc mới load
@@ -215,11 +221,64 @@ const Sidebar = () => {
           </div>
         )}
 
+        {/* User Info & Sign Out inside Sidebar for Mobile/Tablet convenience */}
+        {sidebarOpen && user && (
+          <div
+            className="sidebar-user-footer"
+            style={{
+              padding: "12px 16px",
+              borderTop: "1px solid var(--border-primary)",
+              background: "rgba(255, 255, 255, 0.02)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "10px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", overflow: "hidden" }}>
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: "var(--radius-full)",
+                  background: "var(--gradient-primary)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "white",
+                  flexShrink: 0,
+                }}
+              >
+                {firstLetter}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "120px" }} title={user.email || ""}>
+                  {userPrefix}
+                </span>
+                <span style={{ fontSize: 10, color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "120px" }} title={user.email || ""}>
+                  {user.email}
+                </span>
+              </div>
+            </div>
+            
+            <button
+              onClick={() => signOut()}
+              className="btn-icon"
+              style={{ width: 30, height: 30, color: "var(--accent-pink)", flexShrink: 0 }}
+              title="Đăng xuất"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
+        )}
+
         {/* Footer */}
         {sidebarOpen && (
           <div
             style={{
-              padding: "16px 20px",
+              padding: "12px 20px",
               borderTop: "1px solid var(--border-primary)",
               fontSize: 12,
               color: "var(--text-muted)",

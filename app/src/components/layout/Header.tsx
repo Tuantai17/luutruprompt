@@ -41,11 +41,12 @@ const Header = () => {
       }}
     >
       {/* Left side */}
-      <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0, flex: 1 }}>
         {/* Mobile menu button */}
         <button
           onClick={toggleSidebar}
           className="btn-icon mobile-menu-btn"
+          style={{ flexShrink: 0 }}
           title="Menu"
         >
           <Menu size={20} />
@@ -53,10 +54,12 @@ const Header = () => {
 
         {/* Search bar */}
         <div
+          className="header-search-container"
           style={{
             position: "relative",
             width: "380px",
             maxWidth: "50vw",
+            transition: "all var(--transition-base)",
           }}
         >
           <Search
@@ -72,7 +75,7 @@ const Header = () => {
           />
           <input
             type="text"
-            placeholder="Tìm kiếm prompt, ảnh, workflow..."
+            placeholder="Tìm kiếm..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="input-field"
@@ -81,34 +84,36 @@ const Header = () => {
               height: 40,
               fontSize: 13,
               background: "var(--bg-tertiary)",
+              textOverflow: "ellipsis",
             }}
           />
         </div>
       </div>
 
       {/* Right side */}
-      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
         <button
           onClick={() => setUploadModalOpen(true)}
           className="btn-primary"
-          style={{ padding: "8px 16px", fontSize: 13 }}
+          style={{ padding: "8px 12px", fontSize: 13 }}
+          title="Tải ảnh/prompt lên"
         >
-          <Plus size={16} />
-          <span>Tải lên</span>
+          <Plus size={16} style={{ flexShrink: 0 }} />
+          <span className="btn-upload-text">Tải lên</span>
         </button>
 
-        <button className="btn-icon" title="Upload nhanh">
+        <button className="btn-icon header-hide-mobile" title="Upload nhanh">
           <Upload size={18} />
         </button>
 
-        <button className="btn-icon" title="Thông báo">
+        <button className="btn-icon header-hide-mobile" title="Thông báo">
           <Bell size={18} />
         </button>
 
         {/* User Profile & Logout */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginLeft: "12px", borderLeft: "1px solid var(--border-primary)", paddingLeft: "12px" }}>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100px" }} title={user?.email || ""}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginLeft: "4px", borderLeft: "1px solid var(--border-primary)", paddingLeft: "12px", flexShrink: 0 }}>
+          <div className="user-text-container" style={{ flexDirection: "column", alignItems: "flex-end" }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "90px" }} title={user?.email || ""}>
               {userPrefix}
             </span>
             <button
@@ -148,6 +153,7 @@ const Header = () => {
               color: "white",
               cursor: "default",
               boxShadow: "0 0 10px rgba(139, 92, 246, 0.4)",
+              flexShrink: 0,
             }}
             title={user?.email || "User"}
           >
