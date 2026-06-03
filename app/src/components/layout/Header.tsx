@@ -1,5 +1,7 @@
 "use client";
 
+import { useState, useEffect } from "react";
+import { useTheme } from "next-themes";
 import { useAppStore } from "@/lib/store";
 import { useAuth } from "@/components/layout/AuthProvider";
 import {
@@ -9,6 +11,9 @@ import {
   Bell,
   Plus,
   LogOut,
+  Sun,
+  Moon,
+  Monitor,
 } from "lucide-react";
 
 const Header = () => {
@@ -21,6 +26,14 @@ const Header = () => {
   } = useAppStore();
 
   const { user, signOut } = useAuth();
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  const [showThemeMenu, setShowThemeMenu] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const firstLetter = user?.email ? user.email.charAt(0).toUpperCase() : "U";
   const userPrefix = user?.email ? user.email.split("@")[0] : "User";
 
@@ -109,6 +122,85 @@ const Header = () => {
         <button className="btn-icon header-hide-mobile" title="Thông báo">
           <Bell size={18} />
         </button>
+
+        {/* Theme Switcher */}
+        <div style={{ position: "relative" }}>
+          <button
+            onClick={() => setShowThemeMenu(!showThemeMenu)}
+            className="btn-icon"
+            title="Chuyển chế độ Sáng/Tối"
+            style={{ position: "relative" }}
+          >
+            {mounted && theme === "dark" ? (
+              <Moon size={18} style={{ color: "var(--accent-purple)" }} />
+            ) : mounted && theme === "light" ? (
+              <Sun size={18} style={{ color: "var(--accent-amber)" }} />
+            ) : (
+              <Monitor size={18} />
+            )}
+          </button>
+
+          {showThemeMenu && (
+            <>
+              {/* Overlay click to close */}
+              <div
+                onClick={() => setShowThemeMenu(false)}
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 40,
+                }}
+              />
+              <div
+                className="glass-card animate-scaleIn"
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  right: 0,
+                  marginTop: 8,
+                  width: 140,
+                  padding: 4,
+                  zIndex: 50,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                  border: "1px solid var(--border-primary)",
+                  boxShadow: "var(--shadow-lg)",
+                }}
+              >
+                {[
+                  { value: "light", label: "☀️ Sáng" },
+                  { value: "dark", label: "🌙 Tối" },
+                  { value: "system", label: "💻 Hệ thống" },
+                ].map((item) => {
+                  const isActive = theme === item.value;
+                  return (
+                    <button
+                      key={item.value}
+                      onClick={() => {
+                        setTheme(item.value);
+                        setShowThemeMenu(false);
+                      }}
+                      className="btn-ghost"
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px",
+                        fontSize: 12.5,
+                        justifyContent: "flex-start",
+                        borderRadius: "var(--radius-sm)",
+                        background: isActive ? "var(--bg-tertiary)" : "transparent",
+                        color: isActive ? "var(--accent-purple)" : "var(--text-primary)",
+                        fontWeight: isActive ? 600 : 500,
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
 
         {/* User Profile & Logout */}
         <div style={{ display: "flex", alignItems: "center", gap: "10px", marginLeft: "4px", borderLeft: "1px solid var(--border-primary)", paddingLeft: "12px", flexShrink: 0 }}>

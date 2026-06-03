@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200" role="img" aria-label="Generated elevator video frame">
+  <rect width="900" height="1200" fill="#101113"/>
+  <rect x="100" y="80" width="700" height="990" rx="20" fill="#65645f"/>
+  <path d="M450 82v988" stroke="#d7d2c8" stroke-width="5" opacity=".35"/>
+  <rect x="120" y="870" width="660" height="200" fill="#9d9182"/>
+  <rect x="140" y="170" width="76" height="430" rx="12" fill="#202124"/>
+  <g fill="#d5d1c8" opacity=".72">
+    <circle cx="178" cy="225" r="9"/><circle cx="178" cy="268" r="9"/><circle cx="178" cy="311" r="9"/><circle cx="178" cy="354" r="9"/>
+    <circle cx="178" cy="397" r="9"/><circle cx="178" cy="440" r="9"/><circle cx="178" cy="483" r="9"/><circle cx="178" cy="526" r="9"/>
+  </g>
+  <g transform="translate(12 15)">
+    <path d="M408 336c-82 23-134 93-148 207l-35 310h350l-35-310c-14-114-50-184-132-207z" fill="#55565a"/>
+    <path d="M288 532c-46 72-70 163-76 268h92c13-65 35-132 66-202z" fill="#44464a"/>
+    <path d="M528 532c54 77 82 168 86 268h-94c-14-65-37-132-68-202z" fill="#44464a"/>
+    <path d="M305 765h216l42 120H267z" fill="#1d1d22"/>
+    <path d="M322 874h85l-22 205h-64zM430 874h87l60 205h-67z" fill="#c79a78"/>
+    <path d="M305 1064h85v42h-98zM507 1064h90v42h-104z" fill="#211f1d"/>
+    <circle cx="413" cy="265" r="62" fill="#c28f6d"/>
+    <path d="M340 258c6-88 64-136 132-120 88 21 112 105 76 179-58-44-126-67-208-59z" fill="#151313"/>
+    <path d="M352 182c-45 62-45 158 0 214 18-66 76-130 165-160-33-48-108-85-165-54z" fill="#1c1716"/>
+    <rect x="413" y="264" width="66" height="94" rx="15" fill="#f07c35"/>
+    <circle cx="447" cy="311" r="10" fill="#151515"/>
+  </g>
+  <rect x="115" y="1045" width="670" height="40" rx="20" fill="#111" opacity=".55"/>
+  <text x="148" y="1071" font-family="Inter, Arial" font-size="22" fill="#fff">1x • Video • Final Flash • 10s</text>
+</svg>

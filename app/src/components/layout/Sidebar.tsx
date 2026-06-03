@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAppStore } from "@/lib/store";
@@ -41,6 +41,11 @@ const Sidebar = () => {
   const pathname = usePathname();
   const { sidebarOpen, toggleSidebar, setSidebarOpen } = useAppStore();
   const { user, signOut } = useAuth();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const firstLetter = user?.email ? user.email.charAt(0).toUpperCase() : "U";
   const userPrefix = user?.email ? user.email.split("@")[0] : "User";
@@ -157,6 +162,7 @@ const Sidebar = () => {
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch={false}
                 title={item.label}
                 style={{
                   display: "flex",
@@ -286,12 +292,20 @@ const Sidebar = () => {
               borderTop: "1px solid var(--border-primary)",
               fontSize: 12,
               color: "var(--text-muted)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <Sparkles size={12} style={{ color: "var(--accent-purple)" }} />
               PromptVault v1.0
             </div>
+            {mounted && typeof window !== "undefined" && (
+              <div style={{ fontSize: 9, color: "var(--accent-pink)", marginTop: 4, wordBreak: "break-all" }}>
+                HTML: "{document.documentElement.className}" | Body: "{document.body.className}" | BG: "{window.getComputedStyle(document.body).backgroundColor}"
+              </div>
+            )}
           </div>
         )}
       </aside>

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="700" viewBox="0 0 900 700" role="img" aria-label="Grey hoodie outfit reference">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1">
+      <stop offset="0" stop-color="#e7e8e8"/>
+      <stop offset="1" stop-color="#a8aaa9"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="700" fill="url(#bg)"/>
+  <rect x="0" y="500" width="900" height="200" fill="#d0c7ba"/>
+  <g transform="translate(95 -30)">
+    <path d="M355 140c-92 28-145 112-156 235l-33 270h382l-34-270c-14-123-66-207-159-235z" fill="#4d4f52"/>
+    <path d="M250 338c-64 80-100 173-108 280h105c17-76 42-157 77-244z" fill="#3e4044"/>
+    <path d="M459 338c64 80 101 173 109 280H463c-17-76-42-157-77-244z" fill="#3e4044"/>
+    <path d="M248 548h224l46 103H205z" fill="#202024"/>
+    <path d="M260 640h97l-28 95h-82zM372 640h96l45 95h-82z" fill="#d6b08e"/>
+    <path d="M225 724h98v42H212zM420 724h103v42H407z" fill="#19191d"/>
+    <circle cx="356" cy="78" r="63" fill="#c99571"/>
+    <path d="M285 72c4-79 59-122 124-108 84 18 104 88 76 154-53-32-122-53-200-46z" fill="#131313"/>
+    <path d="M331 173c37 22 75 22 113 0l-54 97z" fill="#383a3d"/>
+    <rect x="340" y="81" width="72" height="100" rx="16" fill="#ff8a3d"/>
+    <circle cx="376" cy="128" r="10" fill="#1a1a1a"/>
+    <path d="M548 388c38 17 60 47 66 91l-58 4c-9-31-28-55-58-73z" fill="#111"/>
+    <circle cx="620" cy="497" r="24" fill="#171717"/>
+  </g>
+</svg>

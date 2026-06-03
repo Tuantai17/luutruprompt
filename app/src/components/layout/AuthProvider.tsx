@@ -20,6 +20,7 @@ const AuthContext = createContext<AuthContextType>({
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
 
   // Form states
   const [isSignUp, setIsSignUp] = useState(false);
@@ -31,6 +32,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [infoMsg, setInfoMsg] = useState("");
 
   useEffect(() => {
+    setMounted(true);
+
     // Check active session on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -104,54 +107,55 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setLoading(false);
   };
 
-  if (loading) {
-    // Stunning dynamic glassmorphic loading screen
-    return (
-      <div className="auth-bg" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
-        <div className="loader-container">
-          <Loader2 className="loader-spinner" size={48} />
-          <div className="loader-text">Đang kết nối hệ thống dữ liệu...</div>
-        </div>
-        <style jsx global>{`
-          .auth-bg {
-            background: radial-gradient(circle at 50% 50%, #151128 0%, #0b0914 100%);
-            position: relative;
-            overflow: hidden;
-          }
-          .loader-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 16px;
-            background: rgba(255, 255, 255, 0.03);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            padding: 32px 48px;
-            border-radius: 16px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
-            animation: pulse 2s infinite ease-in-out;
-          }
-          .loader-spinner {
-            color: #8b5cf6;
-            animation: spin 1.2s linear infinite;
-            filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.6));
-          }
-          .loader-text {
-            color: #a78bfa;
-            font-size: 14px;
-            font-weight: 500;
-            letter-spacing: 0.02em;
-          }
-          @keyframes spin {
-            to { transform: rotate(360deg); }
-          }
-          @keyframes pulse {
-            0%, 100% { transform: scale(1); opacity: 0.9; }
-            50% { transform: scale(1.02); opacity: 1; }
-          }
-        `}</style>
+  const renderLoading = () => (
+    <div suppressHydrationWarning className="auth-bg" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+      <div suppressHydrationWarning className="loader-container">
+        <Loader2 className="loader-spinner" size={48} />
+        <div suppressHydrationWarning className="loader-text">Đang kết nối hệ thống dữ liệu...</div>
       </div>
-    );
+      <style jsx global>{`
+        .auth-bg {
+          background: radial-gradient(circle at 50% 50%, #151128 0%, #0b0914 100%);
+          position: relative;
+          overflow: hidden;
+        }
+        .loader-container {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 16px;
+          background: rgba(255, 255, 255, 0.03);
+          backdrop-filter: blur(20px);
+          border: 1px solid rgba(255, 255, 255, 0.06);
+          padding: 32px 48px;
+          border-radius: 16px;
+          box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+          animation: pulse 2s infinite ease-in-out;
+        }
+        .loader-spinner {
+          color: #8b5cf6;
+          animation: spin 1.2s linear infinite;
+          filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.6));
+        }
+        .loader-text {
+          color: #a78bfa;
+          font-size: 14px;
+          font-weight: 500;
+          letter-spacing: 0.02em;
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes pulse {
+          0%, 100% { transform: scale(1); opacity: 0.9; }
+          50% { transform: scale(1.02); opacity: 1; }
+        }
+      `}</style>
+    </div>
+  );
+
+  if (!mounted || loading) {
+    return renderLoading();
   }
 
   if (!user) {

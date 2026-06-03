@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabaseClient";
-import { createPrompt } from "@/lib/db";
+import { createPrompt, deletePrompt } from "@/lib/db";
+import { useDriveSyncStore } from "@/lib/driveSyncStore";
 import {
   Download,
   Link2,
@@ -22,6 +24,9 @@ import {
   Server,
   Folder,
   RefreshCw as SyncIcon,
+  Trash2,
+  Square,
+  CheckSquare,
 } from "lucide-react";
 
 // Danh sách nền tảng hỗ trợ
@@ -42,6 +47,7 @@ interface DownloadResult {
   creator: string;
   platform: string;
   duration: number;
+  createdAt?: string;
 }
 
 interface BatchItem {
@@ -54,6 +60,30 @@ interface BatchItem {
 
 const getErrorMessage = (error: unknown, fallback: string) => {
   return error instanceof Error ? error.message : fallback;
+};
+
+const formatRelativeTime = (dateInput?: string | Date) => {
+  if (!dateInput) return "";
+  const date = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHr = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHr / 24);
+
+  if (diffSec < 60) return "Vừa xong";
+  if (diffMin < 60) return `${diffMin} phút trước`;
+  if (diffHr < 24) return `${diffHr} giờ trước`;
+  if (diffDay === 1) return "Hôm qua";
+  if (diffDay < 7) return `${diffDay} ngày trước`;
+
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes} ${day}/${month}/${year}`;
 };
 
 const DownloaderPage = () => {
@@ -72,17 +102,77 @@ const DownloaderPage = () => {
   const [isBatchRunning, setIsBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ total: 0, completed: 0, success: 0, failed: 0 });
 
-  // Drive sync states
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncLogs, setSyncLogs] = useState<string[]>([]);
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState(false);
-  const [folderId, setFolderId] = useState("1WS-Ts0AiofSYK-1tqZeRId02SRSwUdh9");
+  // Drive sync states từ Zustand store toàn cục
+  const {
+    isSyncing,
+    syncLogs,
+    autoSyncEnabled,
+    folderId,
+    syncStatus,
+    setAutoSyncEnabled,
+    setFolderId,
+    setSyncStatus,
+    handleDriveSync,
+    lastSyncTime,
+  } = useDriveSyncStore();
 
   // User info & History
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [downloadHistory, setDownloadHistory] = useState<DownloadResult[]>([]);
   const [lightboxVideo, setLightboxVideo] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // States & hàm xử lý quản lý lịch sử tải
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([]);
+  const [isDeletingHistory, setIsDeletingHistory] = useState(false);
+
+  const toggleSelectHistory = (id: string) => {
+    setSelectedHistoryIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllHistory = () => {
+    if (selectedHistoryIds.length === downloadHistory.length) {
+      setSelectedHistoryIds([]);
+    } else {
+      setSelectedHistoryIds(downloadHistory.map((item) => item.id));
+    }
+  };
+
+  const handleDeleteHistoryItem = async (promptId: string) => {
+    if (confirm("Bạn có chắc chắn muốn xóa video này khỏi lịch sử tải và giải phóng bộ nhớ Cloud?")) {
+      try {
+        await deletePrompt(promptId);
+        setSelectedHistoryIds((prev) => prev.filter((id) => id !== promptId));
+        fetchLatestHistory();
+      } catch (err: any) {
+        alert(`Không thể xóa: ${err.message || err}`);
+      }
+    }
+  };
+
+  const handleDeleteSelectedHistory = async () => {
+    if (selectedHistoryIds.length === 0) return;
+    if (
+      confirm(
+        `Bạn có chắc chắn muốn xóa ${selectedHistoryIds.length} lịch sử tải đã chọn? (Điều này cũng sẽ xóa video trên Cloud Storage tương ứng)`
+      )
+    ) {
+      setIsDeletingHistory(true);
+      try {
+        for (const id of selectedHistoryIds) {
+          await deletePrompt(id);
+        }
+        setSelectedHistoryIds([]);
+        fetchLatestHistory();
+      } catch (err: any) {
+        alert(`Có lỗi xảy ra trong quá trình xóa: ${err.message || err}`);
+      } finally {
+        setIsDeletingHistory(false);
+      }
+    }
+  };
 
   // Load User ID và Lịch sử tải thực tế từ DB khi mount
   useEffect(() => {
@@ -96,22 +186,12 @@ const DownloaderPage = () => {
     initData();
   }, []);
 
-  // Lắng nghe trạng thái Tự động đồng bộ
+  // Lắng nghe thay đổi lastSyncTime từ background sync để cập nhật lại lịch sử tải
   useEffect(() => {
-    let timer: NodeJS.Timeout | null = null;
-    if (autoSyncEnabled) {
-      // Thực hiện quét ngay khi bật
-      handleDriveSync(true);
-      
-      // Định kỳ 30 giây quét một lần
-      timer = setInterval(() => {
-        handleDriveSync(true);
-      }, 30000);
+    if (currentUserId) {
+      fetchLatestHistory();
     }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [autoSyncEnabled]);
+  }, [lastSyncTime, currentUserId]);
 
   // Hàm load lịch sử tải từ database Supabase (bảng prompts)
   const fetchLatestHistory = async (userIdStr?: string) => {
@@ -150,6 +230,7 @@ const DownloaderPage = () => {
             creator: metadata.creator || "",
             platform: metadata.platform || "other",
             duration: metadata.duration || 0,
+            createdAt: row.createdAt,
           };
         });
         setDownloadHistory(history);
@@ -338,66 +419,6 @@ const DownloaderPage = () => {
 
     setIsBatchRunning(false);
     fetchLatestHistory();
-  };
-
-  // Đồng bộ Google Drive qua API
-  const handleDriveSync = async (isAuto = false) => {
-    if (isSyncing) return;
-    setIsSyncing(true);
-
-    if (!isAuto) {
-      setSyncLogs((prev) => [
-        `[${new Date().toLocaleTimeString()}] 🚀 Bắt đầu quét thư mục Google Drive...`,
-      ]);
-    }
-
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
-      const response = await fetch("/api/video/drive-sync", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Lỗi đồng bộ.");
-      }
-
-      if (data.logs && data.logs.length > 0) {
-        if (isAuto) {
-          // Chỉ thêm log tự động nếu có tải thành công
-          if (data.downloadedCount > 0) {
-            setSyncLogs((prev) => [
-              ...prev,
-              `[${new Date().toLocaleTimeString()}] (Auto-Sync) Đồng bộ thành công: Tải về thêm ${data.downloadedCount} video.`,
-              ...data.logs,
-            ]);
-            fetchLatestHistory();
-          }
-        } else {
-          setSyncLogs(data.logs);
-          fetchLatestHistory();
-        }
-      } else {
-        if (!isAuto) {
-          setSyncLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Đồng bộ hoàn tất: Không phát hiện tệp tin mới.`]);
-        }
-      }
-    } catch (err: any) {
-      const errMsg = err.message || "Lỗi kết nối API";
-      if (!isAuto) {
-        setSyncLogs((prev) => [...prev, `❌ [LỖI] ${errMsg}`]);
-      } else {
-        console.error("Drive Auto Sync error:", errMsg);
-      }
-    } finally {
-      setIsSyncing(false);
-    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -882,6 +903,40 @@ const DownloaderPage = () => {
               </div>
             </div>
 
+            {/* Alert Status */}
+            {syncStatus && syncStatus.status !== "idle" && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  padding: "12px 16px",
+                  background: syncStatus.status === "success" ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)",
+                  border: syncStatus.status === "success" ? "1px solid rgba(16, 185, 129, 0.2)" : "1px solid rgba(239, 68, 68, 0.2)",
+                  borderRadius: "var(--radius-lg)",
+                  marginBottom: 16,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {syncStatus.status === "success" ? (
+                    <CheckCircle size={18} style={{ color: "var(--accent-green)", flexShrink: 0 }} />
+                  ) : (
+                    <AlertCircle size={18} style={{ color: "var(--accent-red)", flexShrink: 0 }} />
+                  )}
+                  <span style={{ fontSize: 13, fontWeight: 500, color: syncStatus.status === "success" ? "var(--accent-green)" : "var(--accent-red)" }}>
+                    {syncStatus.message}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSyncStatus(null)}
+                  style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", display: "flex", alignItems: "center", padding: 0 }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            )}
+
             {/* Live Logs Terminal */}
             <div>
               <span style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>
@@ -1180,121 +1235,229 @@ const DownloaderPage = () => {
             Lịch sử tải gần đây
           </h2>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {downloadHistory.map((item, idx) => (
-              <div
-                key={`${item.id}-${idx}`}
-                className="glass-card glass-card-hover"
+          {/* Action Bar for History */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "10px 14px",
+              background: "rgba(255,255,255,0.02)",
+              border: "1px solid var(--border-secondary)",
+              borderRadius: "var(--radius-md)",
+              marginBottom: 12,
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <button
+              onClick={toggleSelectAllHistory}
+              className="btn-secondary"
+              style={{ padding: "6px 12px", fontSize: 12, height: 32, gap: 6, display: "flex", alignItems: "center" }}
+            >
+              {selectedHistoryIds.length === downloadHistory.length ? (
+                <>
+                  <CheckSquare size={14} style={{ color: "var(--accent-purple)" }} />
+                  <span>Bỏ chọn tất cả</span>
+                </>
+              ) : (
+                <>
+                  <Square size={14} />
+                  <span>Chọn tất cả ({selectedHistoryIds.length}/{downloadHistory.length})</span>
+                </>
+              )}
+            </button>
+
+            {selectedHistoryIds.length > 0 && (
+              <button
+                onClick={handleDeleteSelectedHistory}
+                className="btn-primary"
+                disabled={isDeletingHistory}
                 style={{
-                  padding: "12px 16px",
+                  padding: "0 14px",
+                  height: 32,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  background: "rgba(239, 68, 68, 0.08)",
+                  color: "var(--accent-red)",
+                  border: "1px solid rgba(239, 68, 68, 0.2)",
+                  borderRadius: "var(--radius-md)",
                   display: "flex",
                   alignItems: "center",
-                  gap: 14,
+                  gap: 6,
                   cursor: "pointer",
                 }}
-                onClick={() => setLightboxVideo(item.videoUrl)}
               >
-                {/* Thumbnail */}
+                {isDeletingHistory ? (
+                  <RefreshCw size={12} className="animate-spin" />
+                ) : (
+                  <Trash2 size={13} />
+                )}
+                <span>Xóa đã chọn ({selectedHistoryIds.length})</span>
+              </button>
+            )}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {downloadHistory.map((item, idx) => {
+              const isSelected = selectedHistoryIds.includes(item.id);
+              return (
                 <div
+                  key={`${item.id}-${idx}`}
+                  className="glass-card glass-card-hover"
                   style={{
-                    width: 80,
-                    height: 50,
-                    borderRadius: "var(--radius-sm)",
-                    overflow: "hidden",
-                    flexShrink: 0,
-                    background: "#000",
-                    position: "relative",
+                    padding: "12px 16px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 14,
+                    cursor: "pointer",
+                    border: isSelected ? "1px solid rgba(139, 92, 246, 0.4)" : "1px solid var(--border-secondary)",
+                    background: isSelected ? "rgba(139, 92, 246, 0.02)" : "rgba(30, 30, 46, 0.4)",
                   }}
+                  onClick={() => setLightboxVideo(item.videoUrl)}
                 >
-                  <img
-                    src={item.thumbnailUrl}
-                    alt=""
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    onError={(e) => {
-                      e.currentTarget.src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=200";
-                    }}
-                  />
+                  {/* Checkbox */}
                   <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSelectHistory(item.id);
+                    }}
                     style={{
-                      position: "absolute",
-                      inset: 0,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      background: "rgba(0,0,0,0.3)",
+                      cursor: "pointer",
+                      padding: "0 4px",
+                      flexShrink: 0,
                     }}
+                    title={isSelected ? "Bỏ chọn" : "Chọn video này"}
                   >
-                    <Play size={16} color="white" fill="white" />
-                  </div>
-                </div>
-
-                {/* Info */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: "var(--text-primary)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {item.title || "Video đã tải"}
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 8 }}>
-                    <span>{item.creator}</span>
-                    <span>•</span>
-                    <span style={{ textTransform: "uppercase" }}>{item.platform}</span>
-                    {item.duration > 0 && (
-                      <>
-                        <span>•</span>
-                        <span>{item.duration}s</span>
-                      </>
+                    {isSelected ? (
+                      <CheckSquare size={18} style={{ color: "var(--accent-purple)" }} />
+                    ) : (
+                      <Square size={18} style={{ color: "var(--text-muted)" }} />
                     )}
                   </div>
-                </div>
 
-                {/* Quick Actions */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                  <a
-                    href={item.videoUrl}
-                    download={`${item.platform}_${item.id}.mp4`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn-icon"
-                    style={{ color: "var(--accent-pink)", flexShrink: 0 }}
-                    onClick={(e) => e.stopPropagation()}
-                    title="Tải về máy"
+                  {/* Thumbnail */}
+                  <div
+                    style={{
+                      width: 80,
+                      height: 50,
+                      borderRadius: "var(--radius-sm)",
+                      overflow: "hidden",
+                      flexShrink: 0,
+                      background: "#000",
+                      position: "relative",
+                    }}
                   >
-                    <Download size={16} />
-                  </a>
-                  <a
-                    href={item.originUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn-icon"
-                    style={{ color: "var(--accent-cyan)", flexShrink: 0 }}
-                    onClick={(e) => e.stopPropagation()}
-                    title="Xem gốc"
-                  >
-                    <ExternalLink size={15} />
-                  </a>
+                    <img
+                      src={item.thumbnailUrl}
+                      alt=""
+                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                      onError={(e) => {
+                        e.currentTarget.src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=200";
+                      }}
+                    />
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: "rgba(0,0,0,0.3)",
+                      }}
+                    >
+                      <Play size={16} color="white" fill="white" />
+                    </div>
+                  </div>
+
+                  {/* Info */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: "var(--text-primary)",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {item.title || "Video đã tải"}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 8 }}>
+                      <span>{item.creator}</span>
+                      <span>•</span>
+                      <span style={{ textTransform: "uppercase" }}>{item.platform}</span>
+                      {item.duration > 0 && (
+                        <>
+                          <span>•</span>
+                          <span>{item.duration}s</span>
+                        </>
+                      )}
+                      {item.createdAt && (
+                        <>
+                          <span>•</span>
+                          <span style={{ color: "var(--text-muted)", opacity: 0.8 }}>{formatRelativeTime(item.createdAt)}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Quick Actions */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                    <a
+                      href={item.videoUrl}
+                      download={`${item.platform}_${item.id}.mp4`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-icon"
+                      style={{ color: "var(--accent-pink)", flexShrink: 0 }}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Tải về máy"
+                    >
+                      <Download size={16} />
+                    </a>
+                    <a
+                      href={item.originUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-icon"
+                      style={{ color: "var(--accent-cyan)", flexShrink: 0 }}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Xem gốc"
+                    >
+                      <ExternalLink size={15} />
+                    </a>
+                    <button
+                      className="btn-icon"
+                      style={{ color: "var(--accent-red)", flexShrink: 0, background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteHistoryItem(item.id);
+                      }}
+                      title="Xóa khỏi lịch sử"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* Video Lightbox */}
-      {lightboxVideo && (
+      {lightboxVideo && typeof document !== "undefined" && createPortal(
         <div
           style={{
             position: "fixed",
             inset: 0,
             background: "rgba(0,0,0,0.95)",
-            zIndex: 100,
+            zIndex: 9999,
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
@@ -1318,7 +1481,7 @@ const DownloaderPage = () => {
               alignItems: "center",
               justifyContent: "center",
               cursor: "pointer",
-              zIndex: 101,
+              zIndex: 10000,
             }}
             onClick={() => setLightboxVideo(null)}
           >
@@ -1327,14 +1490,16 @@ const DownloaderPage = () => {
 
           <div
             style={{
-              maxWidth: 960,
-              width: "100%",
-              maxHeight: "80vh",
-              aspectRatio: "16/9",
+              maxWidth: "90%",
+              width: "auto",
+              maxHeight: "85vh",
               background: "#000",
               borderRadius: "var(--radius-lg)",
               overflow: "hidden",
               boxShadow: "0 0 40px rgba(244, 114, 182, 0.3)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -1342,10 +1507,11 @@ const DownloaderPage = () => {
               src={lightboxVideo}
               autoPlay
               controls
-              style={{ width: "100%", height: "100%", objectFit: "contain" }}
+              style={{ maxHeight: "85vh", maxWidth: "100%", objectFit: "contain" }}
             />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

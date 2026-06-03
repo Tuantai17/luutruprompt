@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   db,
   createPrompt,
@@ -27,6 +28,9 @@ import {
   Workflow,
   ChevronDown,
   Star,
+  Square,
+  CheckSquare,
+  Check,
 } from "lucide-react";
 
 const typeConfig: Record<
@@ -46,6 +50,9 @@ const PromptsPage = () => {
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
   const [filterType, setFilterType] = useState<PromptType | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteProgress, setDeleteProgress] = useState({ current: 0, total: 0 });
 
   const loadPrompts = useCallback(async () => {
     const all = await db.prompts.orderBy("createdAt").reverse().toArray();
@@ -57,6 +64,11 @@ const PromptsPage = () => {
     loadPrompts();
   }, [loadPrompts]);
 
+  // Reset selectedIds khi thay đổi bộ lọc
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [filterType, searchQuery]);
+
   const filteredPrompts = prompts.filter((p) => {
     const matchesType = filterType === "all" || p.type === filterType;
     const matchesSearch =
@@ -67,10 +79,47 @@ const PromptsPage = () => {
     return matchesType && matchesSearch;
   });
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.length === filteredPrompts.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredPrompts.map((p) => p.id));
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (confirm("Bạn có chắc muốn xóa prompt này?")) {
       await deletePrompt(id);
+      setSelectedIds((prev) => prev.filter((x) => x !== id));
       loadPrompts();
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    if (confirm(`Bạn có chắc chắn muốn xóa ${selectedIds.length} prompt đã chọn?`)) {
+      setIsDeleting(true);
+      setDeleteProgress({ current: 0, total: selectedIds.length });
+      try {
+        for (let i = 0; i < selectedIds.length; i++) {
+          const id = selectedIds[i];
+          setDeleteProgress((prev) => ({ ...prev, current: i + 1 }));
+          await deletePrompt(id);
+        }
+        alert(`Đã xóa thành công ${selectedIds.length} prompt.`);
+      } catch (err: any) {
+        alert(`Có lỗi xảy ra khi xóa hàng loạt: ${err.message || err}`);
+      } finally {
+        setIsDeleting(false);
+        setSelectedIds([]);
+        loadPrompts();
+      }
     }
   };
 
@@ -172,6 +221,104 @@ const PromptsPage = () => {
         </div>
       </div>
 
+      {/* Tiến trình Xóa hàng loạt (In-page Banner) */}
+      {isDeleting && (
+        <div
+          className="glass-card animate-fadeIn"
+          style={{
+            padding: "16px 20px",
+            borderRadius: "var(--radius-lg)",
+            border: "1px solid rgba(239, 68, 68, 0.25)",
+            background: "rgba(239, 68, 68, 0.04)",
+            marginBottom: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent-red)" }}>
+              Đang xóa hàng loạt prompt...
+            </span>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Tiến trình: <strong>{deleteProgress.current}</strong> / <strong>{deleteProgress.total}</strong>
+            </span>
+          </div>
+
+          <div style={{ width: "100%", height: 6, background: "var(--border-primary)", borderRadius: "var(--radius-full)", overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${(deleteProgress.current / deleteProgress.total) * 100}%`,
+                height: "100%",
+                background: "linear-gradient(90deg, #ef4444 0%, #b91c1c 100%)",
+                borderRadius: "var(--radius-full)",
+                transition: "width 0.2s ease-out",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Action Bar */}
+      {filteredPrompts.length > 0 && (
+        <div
+          className="glass-card animate-fadeIn"
+          style={{
+            padding: "12px 16px",
+            borderRadius: "var(--radius-lg)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 12,
+            marginBottom: 20,
+            border: "1px solid rgba(139, 92, 246, 0.1)",
+          }}
+        >
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={toggleSelectAll}
+              className="btn-secondary"
+              style={{ padding: "6px 12px", fontSize: 13, height: 34, display: "flex", alignItems: "center", gap: 6 }}
+            >
+              {selectedIds.length === filteredPrompts.length ? (
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <CheckSquare size={14} style={{ color: "var(--accent-purple)" }} />
+                  <span>Bỏ chọn tất cả</span>
+                </span>
+              ) : (
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <Square size={14} />
+                  <span>Chọn tất cả ({selectedIds.length}/{filteredPrompts.length})</span>
+                </span>
+              )}
+            </button>
+          </div>
+
+          {selectedIds.length > 0 && (
+            <button
+              onClick={handleBulkDelete}
+              className="btn-secondary"
+              style={{
+                padding: "0 14px",
+                height: 34,
+                fontSize: 13,
+                fontWeight: 600,
+                color: "var(--accent-red)",
+                borderColor: "rgba(239, 68, 68, 0.2)",
+                background: "rgba(239, 68, 68, 0.05)",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <Trash2 size={14} />
+              <span>Xóa đã chọn ({selectedIds.length})</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Prompt Grid */}
       {filteredPrompts.length === 0 ? (
         <div className="empty-state" style={{ minHeight: 300 }}>
@@ -209,6 +356,8 @@ const PromptsPage = () => {
             <PromptCard
               key={prompt.id}
               prompt={prompt}
+              isSelected={selectedIds.includes(prompt.id)}
+              onSelect={() => toggleSelect(prompt.id)}
               onEdit={() => openEditor(prompt)}
               onDelete={() => handleDelete(prompt.id)}
               onCopy={() => handleCopy(prompt.content)}
@@ -219,7 +368,7 @@ const PromptsPage = () => {
       )}
 
       {/* Prompt Editor Modal */}
-      {editorOpen && (
+      {mounted && editorOpen && createPortal(
         <PromptEditor
           prompt={editingPrompt}
           onClose={() => {
@@ -231,7 +380,8 @@ const PromptsPage = () => {
             setEditingPrompt(null);
             loadPrompts();
           }}
-        />
+        />,
+        document.body
       )}
     </div>
   );
@@ -240,12 +390,16 @@ const PromptsPage = () => {
 // ===== Prompt Card =====
 const PromptCard = ({
   prompt,
+  isSelected,
+  onSelect,
   onEdit,
   onDelete,
   onCopy,
   style,
 }: {
   prompt: Prompt;
+  isSelected: boolean;
+  onSelect: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onCopy: () => void;
@@ -257,7 +411,14 @@ const PromptCard = ({
   return (
     <div
       className="glass-card glass-card-hover animate-fadeIn"
-      style={{ opacity: 0, padding: 20, ...style }}
+      style={{
+        opacity: 0,
+        padding: 20,
+        border: isSelected ? "1.5px solid var(--accent-purple)" : "1px solid var(--border-primary)",
+        boxShadow: isSelected ? "0 8px 30px rgba(139, 92, 246, 0.15)" : "none",
+        position: "relative",
+        ...style,
+      }}
     >
       {/* Header */}
       <div
@@ -269,6 +430,30 @@ const PromptCard = ({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+          {/* Checkbox chọn */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect();
+            }}
+            style={{
+              background: isSelected ? "var(--accent-purple)" : "rgba(255,255,255,0.03)",
+              border: isSelected ? "none" : "1.5px solid var(--border-secondary)",
+              borderRadius: "4px",
+              width: 18,
+              height: 18,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              color: "#fff",
+              flexShrink: 0,
+            }}
+            title={isSelected ? "Bỏ chọn" : "Chọn prompt này"}
+          >
+            {isSelected && <Check size={12} strokeWidth={3} />}
+          </button>
+
           <div
             style={{
               width: 32,

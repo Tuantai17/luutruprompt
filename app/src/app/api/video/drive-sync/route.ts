@@ -55,6 +55,17 @@ if (isR2Configured) {
   });
 }
 
+// Bộ nhớ đệm lưu logs tạm thời của tiến trình đồng bộ đang hoạt động
+let activeSyncLogs: string[] = [];
+let isSyncActive = false;
+
+export async function GET(request: NextRequest) {
+  return NextResponse.json({
+    active: isSyncActive,
+    logs: activeSyncLogs,
+  });
+}
+
 // Hàm upload buffer lên Cloudflare R2
 async function uploadToR2(key: string, buffer: ArrayBuffer | Buffer, contentType: string): Promise<string> {
   if (!s3Client || !r2BucketName) {
@@ -206,10 +217,17 @@ async function downloadViaTikWM(url: string) {
 
 export async function POST(request: NextRequest) {
   const syncLogs: string[] = [];
+  
+  // Khởi động trạng thái đồng bộ và reset logs toàn cục để client polling
+  isSyncActive = true;
+  activeSyncLogs = [];
+
   const addLog = (msg: string) => {
     const time = new Date().toLocaleTimeString();
-    console.log(`[Drive Sync] [${time}] ${msg}`);
-    syncLogs.push(`[${time}] ${msg}`);
+    const logLine = `[${time}] ${msg}`;
+    console.log(`[Drive Sync] ${logLine}`);
+    syncLogs.push(logLine);
+    activeSyncLogs.push(logLine);
   };
 
   try {
@@ -229,6 +247,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!userId) {
+      isSyncActive = false;
       return NextResponse.json(
         { error: "Không tìm thấy User ID hợp lệ. Vui lòng đăng nhập hoặc cấu hình INBOX_DEFAULT_USER_ID." },
         { status: 400 }
@@ -240,6 +259,7 @@ export async function POST(request: NextRequest) {
     const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
 
     if (!serviceAccountKeyStr) {
+      isSyncActive = false;
       return NextResponse.json(
         { error: "Chưa cấu hình khóa dịch vụ Google Service Account (GOOGLE_SERVICE_ACCOUNT_KEY) trong .env.local." },
         { status: 500 }
@@ -247,6 +267,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!folderId) {
+      isSyncActive = false;
       return NextResponse.json(
         { error: "Chưa cấu hình Google Drive Folder ID (GOOGLE_DRIVE_FOLDER_ID) trong .env.local." },
         { status: 500 }
@@ -259,6 +280,7 @@ export async function POST(request: NextRequest) {
     try {
       serviceAccountKey = JSON.parse(serviceAccountKeyStr);
     } catch (parseErr: any) {
+      isSyncActive = false;
       console.error("Failed to parse GOOGLE_SERVICE_ACCOUNT_KEY. Raw value starts with:", serviceAccountKeyStr.substring(0, 50));
       return NextResponse.json(
         { error: `Lỗi phân tích JSON khóa Service Account. Hãy đảm bảo GOOGLE_SERVICE_ACCOUNT_KEY trong .env.local là JSON hợp lệ trên 1 dòng duy nhất. Chi tiết: ${parseErr.message}`, logs: syncLogs },
@@ -273,6 +295,7 @@ export async function POST(request: NextRequest) {
         scopes: ["https://www.googleapis.com/auth/drive"],
       });
     } catch (authErr: any) {
+      isSyncActive = false;
       return NextResponse.json(
         { error: `Lỗi khởi tạo Google Auth: ${authErr.message}`, logs: syncLogs },
         { status: 500 }
@@ -292,6 +315,7 @@ export async function POST(request: NextRequest) {
       files = (filesListResponse.data as any).files || [];
     } catch (driveErr: any) {
       const errMsg = driveErr.message || "Unknown Drive API error";
+      isSyncActive = false;
       if (errMsg.includes("File not found") || driveErr.code === 404) {
         addLog(`❌ Không tìm thấy thư mục Drive. Hãy chắc chắn bạn đã chia sẻ thư mục với email Service Account.`);
         return NextResponse.json(
@@ -307,6 +331,7 @@ export async function POST(request: NextRequest) {
     addLog(`Tìm thấy ${files.length} file mới trên Drive.`);
 
     if (files.length === 0) {
+      isSyncActive = false;
       return NextResponse.json({
         success: true,
         message: "Không có tệp tin nào cần đồng bộ trên Google Drive.",
@@ -316,6 +341,9 @@ export async function POST(request: NextRequest) {
     }
 
     let totalDownloaded = 0;
+    let totalUrlsCount = 0;
+    let duplicateCount = 0;
+    let failedCount = 0;
 
     // 4. Xử lý từng file
     for (const file of files) {
@@ -339,160 +367,221 @@ export async function POST(request: NextRequest) {
         }
 
         // Trích xuất URL từ cả nội dung file VÀ tên file
-        // (Khi chia sẻ link từ TikTok/FB qua Drive, tên file thường chính là URL)
         const contentUrls = parseUrls(content);
         const fileNameUrls = parseUrls(fileName || "");
         
         // Gộp và loại trùng
         const allUrlsSet = new Set([...contentUrls, ...fileNameUrls]);
         const urls = Array.from(allUrlsSet);
+        totalUrlsCount += urls.length;
         
-        addLog(`Tìm thấy ${urls.length} link video hợp lệ (nội dung: ${contentUrls.length}, tên file: ${fileNameUrls.length}).`);
+        addLog(`Tìm thấy ${urls.length} link video trong file "${fileName}".`);
 
-        for (const url of urls) {
-          addLog(`Đang xử lý URL: ${url}`);
-          const platform = getPlatform(url);
-          
-          let videoData = null;
-          if (platform === "tiktok") {
-            videoData = await downloadViaTikWM(url);
-            if (!videoData) videoData = await downloadViaCobalt(url);
-          } else {
-            videoData = await downloadViaCobalt(url);
-          }
+        // Định nghĩa hàm xử lý song song cho từng URL
+        const processUrl = async (url: string) => {
+          const addUrlLog = (msg: string) => {
+            const time = new Date().toLocaleTimeString();
+            const logLine = `[${time}] [Link: ${url.substring(0, 35)}...] ${msg}`;
+            console.log(`[Drive Sync] ${logLine}`);
+            syncLogs.push(logLine);
+            activeSyncLogs.push(logLine); // Đẩy trực tiếp để client polling
+          };
 
-          if (!videoData || !videoData.videoUrl) {
-            addLog(`⚠️ Bỏ qua URL [${url}] - Không thể phân tích link video.`);
-            continue;
-          }
+          try {
+            // Kiểm tra trùng lặp tránh tải lặp
+            addUrlLog(`🔍 Đang kiểm tra trùng lặp...`);
+            const { data: duplicateCheck } = await supabaseClient
+              .from("prompts")
+              .select("id, notes")
+              .eq("user_id", userId)
+              .eq("type", "video")
+              .like("notes", `%${url}%`);
 
-          // Tải file video gốc
-          const videoFetchResponse = await fetch(videoData.videoUrl);
-          if (!videoFetchResponse.ok) {
-            addLog(`⚠️ Lỗi tải file video gốc cho URL: ${url}`);
-            continue;
-          }
-
-          const videoBuffer = await videoFetchResponse.arrayBuffer();
-          const videoSize = videoBuffer.byteLength;
-          
-          if (videoSize > 30 * 1024 * 1024) {
-            addLog(`⚠️ Bỏ qua URL [${url}] - Dung lượng video vượt quá 30MB.`);
-            continue;
-          }
-
-          // Upload video lên Cloud
-          const videoId = crypto.randomUUID();
-          const videoPath = `videos/${userId}/${videoId}.mp4`;
-          let savedVideoUrl = "";
-
-          if (isCloudinaryConfigured) {
-            try {
-              savedVideoUrl = await uploadToCloudinary(videoBuffer, `videos/${userId}`, "video");
-            } catch (err) {
-              const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
-              if (uploadError) throw uploadError;
-              const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
-              savedVideoUrl = urlData.publicUrl;
-            }
-          } else if (isR2Configured) {
-            try {
-              savedVideoUrl = await uploadToR2(videoPath, videoBuffer, "video/mp4");
-            } catch (err) {
-              const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
-              if (uploadError) throw uploadError;
-              const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
-              savedVideoUrl = urlData.publicUrl;
-            }
-          } else {
-            const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
-            if (uploadError) throw uploadError;
-            const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
-            savedVideoUrl = urlData.publicUrl;
-          }
-
-          // Upload Thumbnail
-          let savedThumbnailUrl = "";
-          if (videoData.thumbnailUrl) {
-            try {
-              const thumbResponse = await fetch(videoData.thumbnailUrl);
-              if (thumbResponse.ok) {
-                const thumbBuffer = await thumbResponse.arrayBuffer();
-                const thumbPath = `videos/${userId}/thumbs/${videoId}.jpg`;
-
-                if (isCloudinaryConfigured) {
-                  try {
-                    savedThumbnailUrl = await uploadToCloudinary(thumbBuffer, `videos/${userId}/thumbs`, "image");
-                  } catch {
-                    const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
-                    if (!thumbError) {
-                      const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
-                      savedThumbnailUrl = thumbUrlData.publicUrl;
+            let isDuplicate = false;
+            if (duplicateCheck && duplicateCheck.length > 0) {
+              for (const record of duplicateCheck) {
+                try {
+                  if (record.notes) {
+                    const parsedNotes = JSON.parse(record.notes);
+                    if (parsedNotes.videoMetadata?.originUrl === url) {
+                      isDuplicate = true;
+                      break;
                     }
                   }
-                } else if (isR2Configured) {
-                  try {
-                    savedThumbnailUrl = await uploadToR2(thumbPath, thumbBuffer, "image/jpeg");
-                  } catch {
-                    const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
-                    if (!thumbError) {
-                      const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
-                      savedThumbnailUrl = thumbUrlData.publicUrl;
-                    }
-                  }
-                } else {
-                  const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
-                  if (!thumbError) {
-                    const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
-                    savedThumbnailUrl = thumbUrlData.publicUrl;
+                } catch {
+                  if (record.notes && record.notes.includes(url)) {
+                    isDuplicate = true;
+                    break;
                   }
                 }
               }
-            } catch (thumbErr) {
-              console.error("Fail to sync thumb:", thumbErr);
             }
+
+            if (isDuplicate) {
+              addUrlLog(`⏭️ Bỏ qua - Video đã tồn tại trong thư viện.`);
+              return { success: false, duplicate: true, failed: false };
+            }
+
+            addUrlLog(`🚀 Đang phân tích thông tin video...`);
+            const platform = getPlatform(url);
+            let videoData = null;
+
+            if (platform === "tiktok") {
+              videoData = await downloadViaTikWM(url);
+              if (!videoData) videoData = await downloadViaCobalt(url);
+            } else {
+              videoData = await downloadViaCobalt(url);
+            }
+
+            if (!videoData || !videoData.videoUrl) {
+              addUrlLog(`⚠️ Bỏ qua - Không thể phân tích link video.`);
+              return { success: false, duplicate: false, failed: true };
+            }
+
+            addUrlLog(`📥 Đang tải file video gốc từ nguồn...`);
+            const videoFetchResponse = await fetch(videoData.videoUrl);
+            if (!videoFetchResponse.ok) {
+              addUrlLog(`⚠️ Thất bại khi fetch file video gốc.`);
+              return { success: false, duplicate: false, failed: true };
+            }
+
+            const videoBuffer = await videoFetchResponse.arrayBuffer();
+            const videoSize = videoBuffer.byteLength;
+            
+            if (videoSize > 30 * 1024 * 1024) {
+              addUrlLog(`⚠️ Bỏ qua - Dung lượng video (${(videoSize / 1024 / 1024).toFixed(1)}MB) vượt quá giới hạn 30MB.`);
+              return { success: false, duplicate: false, failed: true };
+            }
+
+            addUrlLog(`☁️ Đang upload video lên Cloud Storage...`);
+            const videoId = crypto.randomUUID();
+            const videoPath = `videos/${userId}/${videoId}.mp4`;
+            let savedVideoUrl = "";
+
+            if (isCloudinaryConfigured) {
+              try {
+                savedVideoUrl = await uploadToCloudinary(videoBuffer, `videos/${userId}`, "video");
+              } catch {
+                const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
+                if (uploadError) throw uploadError;
+                const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
+                savedVideoUrl = urlData.publicUrl;
+              }
+            } else if (isR2Configured) {
+              try {
+                savedVideoUrl = await uploadToR2(videoPath, videoBuffer, "video/mp4");
+              } catch {
+                const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
+                if (uploadError) throw uploadError;
+                const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
+                savedVideoUrl = urlData.publicUrl;
+              }
+            } else {
+              const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
+              if (uploadError) throw uploadError;
+              const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
+              savedVideoUrl = urlData.publicUrl;
+            }
+
+            // Tải & Upload Thumbnail
+            let savedThumbnailUrl = "";
+            if (videoData.thumbnailUrl) {
+              addUrlLog(`🖼️ Đang tải và upload ảnh thu nhỏ (thumbnail)...`);
+              try {
+                const thumbResponse = await fetch(videoData.thumbnailUrl);
+                if (thumbResponse.ok) {
+                  const thumbBuffer = await thumbResponse.arrayBuffer();
+                  const thumbPath = `videos/${userId}/thumbs/${videoId}.jpg`;
+
+                  if (isCloudinaryConfigured) {
+                    try {
+                      savedThumbnailUrl = await uploadToCloudinary(thumbBuffer, `videos/${userId}/thumbs`, "image");
+                    } catch {
+                      const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
+                      if (!thumbError) {
+                        const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
+                        savedThumbnailUrl = thumbUrlData.publicUrl;
+                      }
+                    }
+                  } else if (isR2Configured) {
+                    try {
+                      savedThumbnailUrl = await uploadToR2(thumbPath, thumbBuffer, "image/jpeg");
+                    } catch {
+                      const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
+                      if (!thumbError) {
+                        const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
+                        savedThumbnailUrl = thumbUrlData.publicUrl;
+                      }
+                    }
+                  } else {
+                    const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
+                    if (!thumbError) {
+                      const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
+                      savedThumbnailUrl = thumbUrlData.publicUrl;
+                    }
+                  }
+                }
+              } catch (thumbErr) {
+                console.error("Fail to sync thumb:", thumbErr);
+              }
+            }
+
+            addUrlLog(`💾 Đang ghi nhận thông tin video vào Database...`);
+            const now = new Date().toISOString();
+            const videoMetadata = {
+              id: videoId,
+              videoUrl: savedVideoUrl,
+              thumbnailUrl: savedThumbnailUrl || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500",
+              originUrl: url,
+              platform: platform,
+              duration: videoData.duration || 0,
+              creator: videoData.creator,
+            };
+            const finalNotes = JSON.stringify({ notes: `Đồng bộ từ file Google Drive "${fileName}"`, videoMetadata });
+
+            const { error: dbError } = await supabaseClient.from("prompts").insert({
+              id: videoId,
+              title: videoData.title || `Video Drive Sync - ${videoData.creator}`,
+              content: "Đồng bộ tự động từ Google Drive",
+              negativePrompt: "",
+              type: "video",
+              model: "Drive Sync",
+              lora: "",
+              seed: "",
+              sampler: "",
+              cfgScale: 0,
+              steps: 0,
+              creator: videoData.creator,
+              tags: ["SnapSave", "DriveSync", platform],
+              notes: finalNotes,
+              isFavorite: false,
+              createdAt: now,
+              updatedAt: now,
+              user_id: userId,
+            });
+
+            if (dbError) {
+              addUrlLog(`⚠️ Lưu database thất bại: ${dbError.message}`);
+              return { success: false, duplicate: false, failed: true };
+            }
+
+            addUrlLog(`✅ Thành công! Video đã sẵn sàng trong thư viện.`);
+            return { success: true, duplicate: false, failed: false };
+
+          } catch (urlErr: any) {
+            addUrlLog(`❌ Lỗi khi xử lý link: ${urlErr.message}`);
+            return { success: false, duplicate: false, failed: true };
           }
+        };
 
-          // Lưu cơ sở dữ liệu
-          const now = new Date().toISOString();
-          const videoMetadata = {
-            id: videoId,
-            videoUrl: savedVideoUrl,
-            thumbnailUrl: savedThumbnailUrl || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500",
-            originUrl: url,
-            platform: platform,
-            duration: videoData.duration || 0,
-            creator: videoData.creator,
-          };
-          const finalNotes = JSON.stringify({ notes: `Đồng bộ từ file Google Drive "${fileName}"`, videoMetadata });
-
-          const { error: dbError } = await supabaseClient.from("prompts").insert({
-            id: videoId,
-            title: videoData.title || `Video Drive Sync - ${videoData.creator}`,
-            content: "Đồng bộ tự động từ Google Drive",
-            negativePrompt: "",
-            type: "video",
-            model: "Drive Sync",
-            lora: "",
-            seed: "",
-            sampler: "",
-            cfgScale: 0,
-            steps: 0,
-            creator: videoData.creator,
-            tags: ["SnapSave", "DriveSync", platform],
-            notes: finalNotes,
-            isFavorite: false,
-            createdAt: now,
-            updatedAt: now,
-            user_id: userId,
-          });
-
-          if (dbError) {
-            addLog(`⚠️ Lưu database thất bại cho link [${url}]: ${dbError.message}`);
-          } else {
-            addLog(`✅ Tải thành công video: "${videoData.title}"`);
-            totalDownloaded++;
-          }
+        // Chạy song song toàn bộ URL của file
+        const results = await Promise.all(urls.map(processUrl));
+        
+        // Tổng hợp kết quả đếm
+        for (const res of results) {
+          if (res.success) totalDownloaded++;
+          else if (res.duplicate) duplicateCount++;
+          else if (res.failed) failedCount++;
         }
 
         // Xóa tệp tin trên Google Drive sau khi xử lý thành công
@@ -501,7 +590,7 @@ export async function POST(request: NextRequest) {
           await drive.files.delete({ fileId: fileId! });
           addLog(`Đã xóa file "${fileName}" thành công.`);
         } catch (deleteErr: any) {
-          addLog(`⚠️ Không thể xóa file "${fileName}": ${deleteErr.message}. Hãy kiểm tra Service Account có quyền Người chỉnh sửa (Editor) trên thư mục.`);
+          addLog(`⚠️ Không thể xóa file "${fileName}": ${deleteErr.message}. Hãy kiểm tra Service Account có quyền Editor trên thư mục.`);
         }
 
       } catch (fileErr: any) {
@@ -510,15 +599,20 @@ export async function POST(request: NextRequest) {
     }
 
     addLog(`Đồng bộ Google Drive hoàn tất. Tổng số video đã tải về: ${totalDownloaded}`);
+    isSyncActive = false;
 
     return NextResponse.json({
       success: true,
-      message: `Đồng bộ hoàn tất. Đã tải về ${totalDownloaded} video.`,
+      message: `Đồng bộ hoàn tất. Phát hiện ${totalUrlsCount} link. Đã tải thành công ${totalDownloaded} video, lỗi ${failedCount} link, bỏ qua ${duplicateCount} link trùng.`,
       logs: syncLogs,
+      totalCount: totalUrlsCount,
       downloadedCount: totalDownloaded,
+      failedCount: failedCount,
+      duplicateCount: duplicateCount,
     });
 
   } catch (error: any) {
+    isSyncActive = false;
     addLog(`❌ Lỗi hệ thống: ${error.message || "Unknown error"}`);
     return NextResponse.json(
       { error: `Lỗi hệ thống khi đồng bộ Drive: ${error.message || "Unknown error"}`, logs: syncLogs },

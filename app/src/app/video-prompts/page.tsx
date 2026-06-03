@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { db, createPrompt, updatePrompt, deletePrompt, type Prompt } from "@/lib/db";
 import { supabase } from "@/lib/supabaseClient";
 import { formatDate, truncateText } from "@/lib/utils";
@@ -817,6 +818,19 @@ const VideoPromptsPage = () => {
                         </a>
                       )}
 
+                      {videoMetadata?.originUrl && (
+                        <a
+                          href={videoMetadata.originUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn-ghost"
+                          style={{ fontSize: 12, textDecoration: "none", color: "var(--accent-purple)" }}
+                          title="Xem trên trang gốc (TikTok/Facebook/...)"
+                        >
+                          <ExternalLink size={13} /> Xem gốc
+                        </a>
+                      )}
+
                       <button
                         className="btn-ghost"
                         onClick={() => handleDelete(prompt.id)}
@@ -835,7 +849,7 @@ const VideoPromptsPage = () => {
       </div>
 
       {/* Editor Modal */}
-      {editorOpen && (
+      {mounted && editorOpen && createPortal(
         <VideoPromptEditor
           prompt={editingPrompt}
           onClose={() => {
@@ -847,11 +861,12 @@ const VideoPromptsPage = () => {
             setEditingPrompt(null);
             loadPrompts();
           }}
-        />
+        />,
+        document.body
       )}
 
       {/* Custom Video Lightbox Player */}
-      {lightboxVideo && (
+      {mounted && lightboxVideo && createPortal(
         <div
           className="lightbox-overlay animate-fadeIn"
           style={{
@@ -908,7 +923,8 @@ const VideoPromptsPage = () => {
               style={{ width: "100%", height: "100%", objectFit: "contain" }}
             />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

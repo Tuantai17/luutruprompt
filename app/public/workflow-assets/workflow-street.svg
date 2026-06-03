@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200" role="img" aria-label="Generated street style video frame">
+  <defs>
+    <linearGradient id="city" x1="0" x2="1">
+      <stop offset="0" stop-color="#b8c0c5"/>
+      <stop offset=".45" stop-color="#777d82"/>
+      <stop offset="1" stop-color="#d4d2c9"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="1200" fill="url(#city)"/>
+  <rect y="770" width="900" height="430" fill="#b3a797"/>
+  <g opacity=".4">
+    <rect x="60" y="80" width="180" height="520" fill="#e7edf0"/>
+    <rect x="300" y="70" width="130" height="570" fill="#525b63"/>
+    <rect x="520" y="90" width="230" height="520" fill="#dce0dd"/>
+  </g>
+  <g transform="translate(60 30)">
+    <path d="M380 325c-84 24-135 96-149 216l-36 330h378l-39-330c-14-120-70-192-154-216z" fill="#4d5158"/>
+    <path d="M260 518c-70 85-108 188-118 307h112c20-82 48-163 86-244z" fill="#3f434b"/>
+    <path d="M508 518c72 88 111 188 118 307H512c-18-82-47-163-86-244z" fill="#3f434b"/>
+    <path d="M312 744h159l37 137H268z" fill="#202026"/>
+    <path d="M306 868h90l-34 262h-76zM426 868h94l70 262h-78z" fill="#c69270"/>
+    <circle cx="390" cy="245" r="67" fill="#c6906d"/>
+    <path d="M312 237c7-90 66-143 138-126 92 21 118 108 80 189-60-47-134-71-218-63z" fill="#151313"/>
+    <path d="M326 155c-49 63-49 169 2 232 18-76 86-143 173-174-35-51-112-91-175-58z" fill="#1c1716"/>
+    <rect x="393" y="238" width="70" height="96" rx="16" fill="#f07c35"/>
+    <circle cx="430" cy="286" r="10" fill="#151515"/>
+  </g>
+  <rect x="112" y="1048" width="676" height="42" rx="21" fill="#111" opacity=".6"/>
+  <text x="148" y="1076" font-family="Inter, Arial" font-size="22" fill="#fff">1x • Video • Final Flash • 10s</text>
+</svg>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { db, deletePrompt, type Prompt } from "@/lib/db";
 import {
   Film,
@@ -65,6 +66,27 @@ function parseVideoRecord(prompt: Prompt): VideoRecord | null {
   return null;
 }
 
+const sanitizeFileName = (title: string, fallback: string): string => {
+  if (!title) return fallback;
+  
+  let clean = title
+    .replace(/[\r\n\t]+/g, " ") // Thay thế xuống dòng, tab bằng dấu cách
+    .replace(/[\\/:*?"<>|#%&{}$!@+=`~^;]/g, "_") // Thay thế các ký tự cấm và đặc biệt phổ biến bằng '_'
+    .replace(/[^\w\s\d\u00C0-\u1EF9_-]/gi, "") // Chỉ giữ lại chữ cái (bao gồm tiếng Việt), số, dấu cách, dấu gạch ngang, gạch dưới
+    .trim(); // Xóa khoảng trắng thừa ở đầu và cuối
+    
+  // File System Access API cấm tên file kết thúc bằng dấu cách hoặc dấu chấm hoặc dấu gạch dưới
+  while (clean.endsWith(".") || clean.endsWith(" ") || clean.endsWith("_")) {
+    clean = clean.slice(0, -1).trim();
+  }
+
+  // Giới hạn độ dài tên file (khoảng 40 ký tự)
+  clean = clean.substring(0, 40).trim();
+
+  // Nếu sau khi lọc tên file trống, dùng fallback
+  return clean || fallback;
+};
+
 const VideoLibraryPage = () => {
   const [videos, setVideos] = useState<VideoRecord[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -75,8 +97,22 @@ const VideoLibraryPage = () => {
   // States cho tính năng Tải Hàng Loạt (Bulk Download)
   const [directoryHandle, setDirectoryHandle] = useState<any>(null);
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0, currentTitle: "" });
   const [isPickerSupported, setIsPickerSupported] = useState(false);
+
+  // State thông báo kết quả (Custom alert banner)
+  const [actionStatus, setActionStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  // Tự động ẩn thông báo sau 5 giây
+  useEffect(() => {
+    if (actionStatus) {
+      const timer = setTimeout(() => {
+        setActionStatus(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [actionStatus]);
 
   const loadVideos = useCallback(async () => {
     try {
@@ -137,20 +173,77 @@ const VideoLibraryPage = () => {
         setSelectedIds((prev) => prev.filter((id) => id !== promptId));
         loadVideos();
       } catch (err) {
-        alert("Có lỗi xảy ra khi xóa video.");
+        setActionStatus({ type: "error", message: "Có lỗi xảy ra khi xóa video." });
       }
     }
   };
 
   // Thiết lập thư mục lưu bằng File System Access API
-  const handleSelectDirectory = async () => {
+  const handleSelectDirectory = async (): Promise<any> => {
     try {
       const handle = await (window as any).showDirectoryPicker({
         mode: "readwrite",
       });
       setDirectoryHandle(handle);
+      return handle;
     } catch (err) {
       console.warn("Directory picker rejected or error:", err);
+      return null;
+    }
+  };
+
+  // Tải một video đơn lẻ trực tiếp vào thư mục đã chọn
+  const handleSingleDownload = async (video: VideoRecord) => {
+    let activeHandle = directoryHandle;
+
+    if (!activeHandle) {
+      alert("Vui lòng chọn thư mục lưu trên máy tính của bạn trước khi tải video!");
+      activeHandle = await handleSelectDirectory();
+      if (!activeHandle) {
+        setActionStatus({
+          type: "error",
+          message: "Tải video thất bại: Bạn chưa chọn thư mục lưu.",
+        });
+        return;
+      }
+    }
+
+    setIsBulkDownloading(true); // Dùng chung modal tiến trình tải
+    setDownloadProgress({ current: 0, total: 1, currentTitle: video.title });
+
+    try {
+      const opts = { mode: "readwrite" };
+      if ((await activeHandle.queryPermission(opts)) !== "granted") {
+        if ((await activeHandle.requestPermission(opts)) !== "granted") {
+          throw new Error("Quyền ghi vào thư mục bị từ chối.");
+        }
+      }
+
+      setDownloadProgress((prev) => ({ ...prev, current: 1 }));
+
+      const response = await fetch(video.videoMetadata.videoUrl);
+      if (!response.ok) throw new Error("Không thể tải video từ Cloud.");
+      const blob = await response.blob();
+
+      const cleanTitle = sanitizeFileName(video.title, `video_${video.videoMetadata.id}`);
+      const fileName = `${video.platform}_${cleanTitle}_${video.videoMetadata.id}.mp4`;
+      const fileHandle = await activeHandle.getFileHandle(fileName, { create: true });
+      
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+
+      setActionStatus({
+        type: "success",
+        message: `🎉 Đã tải video thành công vào thư mục: ${activeHandle.name}`,
+      });
+    } catch (err: any) {
+      setActionStatus({
+        type: "error",
+        message: `Lỗi khi tải video: ${err.message || err}`,
+      });
+    } finally {
+      setIsBulkDownloading(false);
     }
   };
 
@@ -158,75 +251,106 @@ const VideoLibraryPage = () => {
   const handleBulkDownload = async () => {
     if (selectedIds.length === 0) return;
 
+    let activeHandle = directoryHandle;
+
+    if (!activeHandle) {
+      alert("Vui lòng chọn thư mục lưu trên máy tính của bạn trước khi tải hàng loạt!");
+      activeHandle = await handleSelectDirectory();
+      if (!activeHandle) {
+        setActionStatus({
+          type: "error",
+          message: "Tải hàng loạt thất bại: Bạn chưa chọn thư mục lưu.",
+        });
+        return;
+      }
+    }
+
     const selectedVideos = videos.filter((v) => selectedIds.includes(v.promptId));
     setIsBulkDownloading(true);
     setDownloadProgress({ current: 0, total: selectedVideos.length, currentTitle: "" });
 
     try {
-      // Nếu đã cài đặt thư mục lưu trực tiếp qua File System Access API
-      if (directoryHandle) {
-        // Xin lại quyền ghi (nếu cần)
-        const opts = { mode: "readwrite" };
-        if ((await directoryHandle.queryPermission(opts)) !== "granted") {
-          if ((await directoryHandle.requestPermission(opts)) !== "granted") {
-            throw new Error("Quyền ghi vào thư mục bị từ chối.");
-          }
-        }
-
-        for (let i = 0; i < selectedVideos.length; i++) {
-          const video = selectedVideos[i];
-          setDownloadProgress((prev) => ({
-            ...prev,
-            current: i + 1,
-            currentTitle: video.title,
-          }));
-
-          try {
-            // Tải file video thành blob
-            const response = await fetch(video.videoMetadata.videoUrl);
-            if (!response.ok) throw new Error("Fetch failed");
-            const blob = await response.blob();
-
-            // Tạo file trong thư mục
-            const cleanTitle = video.title.replace(/[\\/:*?"<>|]/g, "_").substring(0, 50);
-            const fileName = `${video.platform}_${cleanTitle}_${video.videoMetadata.id}.mp4`;
-            const fileHandle = await directoryHandle.getFileHandle(fileName, { create: true });
-            
-            const writable = await fileHandle.createWritable();
-            await writable.write(blob);
-            await writable.close();
-          } catch (fileErr) {
-            console.error(`Lỗi khi lưu video ${video.title}:`, fileErr);
-          }
-        }
-        alert(`Tải hàng loạt thành công! ${selectedVideos.length} video đã được lưu vào thư mục: ${directoryHandle.name}`);
-      } else {
-        // Fallback: Tải tuần tự bằng cơ chế tải mặc định của trình duyệt
-        for (let i = 0; i < selectedVideos.length; i++) {
-          const video = selectedVideos[i];
-          setDownloadProgress((prev) => ({
-            ...prev,
-            current: i + 1,
-            currentTitle: video.title,
-          }));
-
-          const link = document.createElement("a");
-          link.href = video.videoMetadata.videoUrl;
-          link.download = `${video.platform}_${video.videoMetadata.id}.mp4`;
-          link.target = "_blank";
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-
-          // Tránh làm nghẽn tiến trình tải trình duyệt, chờ 800ms giữa mỗi lượt tải
-          await new Promise((r) => setTimeout(r, 800));
+      const opts = { mode: "readwrite" };
+      if ((await activeHandle.queryPermission(opts)) !== "granted") {
+        if ((await activeHandle.requestPermission(opts)) !== "granted") {
+          throw new Error("Quyền ghi vào thư mục bị từ chối.");
         }
       }
+
+      for (let i = 0; i < selectedVideos.length; i++) {
+        const video = selectedVideos[i];
+        setDownloadProgress((prev) => ({
+          ...prev,
+          current: i + 1,
+          currentTitle: video.title,
+        }));
+
+        try {
+          const response = await fetch(video.videoMetadata.videoUrl);
+          if (!response.ok) throw new Error("Fetch failed");
+          const blob = await response.blob();
+
+          const cleanTitle = sanitizeFileName(video.title, `video_${video.videoMetadata.id}`);
+          const fileName = `${video.platform}_${cleanTitle}_${video.videoMetadata.id}.mp4`;
+          const fileHandle = await activeHandle.getFileHandle(fileName, { create: true });
+          
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+        } catch (fileErr) {
+          console.error(`Lỗi khi lưu video ${video.title}:`, fileErr);
+        }
+      }
+      setActionStatus({
+        type: "success",
+        message: `🎉 Tải hàng loạt thành công! ${selectedVideos.length} video đã được lưu vào thư mục: ${activeHandle.name}`,
+      });
     } catch (err: any) {
-      alert(`Đã xảy ra lỗi trong quá trình tải hàng loạt: ${err.message || err}`);
+      setActionStatus({
+        type: "error",
+        message: `Đã xảy ra lỗi trong quá trình tải hàng loạt: ${err.message || err}`,
+      });
     } finally {
       setIsBulkDownloading(false);
       setSelectedIds([]);
+    }
+  };
+
+  // Xóa hàng loạt video được chọn
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+
+    if (confirm(`Bạn có chắc chắn muốn xóa ${selectedIds.length} video đã chọn khỏi thư viện lưu trữ? (Hành động này cũng sẽ xóa video trên Cloud Storage)`)) {
+      setIsDeleting(true);
+      setDownloadProgress({ current: 0, total: selectedIds.length, currentTitle: "" });
+
+      try {
+        for (let i = 0; i < selectedIds.length; i++) {
+          const id = selectedIds[i];
+          const video = videos.find((v) => v.promptId === id);
+          
+          setDownloadProgress((prev) => ({
+            ...prev,
+            current: i + 1,
+            currentTitle: video ? video.title : "Đang xử lý...",
+          }));
+
+          await deletePrompt(id);
+        }
+        setActionStatus({
+          type: "success",
+          message: `🎉 Đã xóa thành công ${selectedIds.length} video khỏi thư viện và Cloud Storage.`,
+        });
+      } catch (err: any) {
+        setActionStatus({
+          type: "error",
+          message: `Có lỗi xảy ra trong quá trình xóa hàng loạt: ${err.message || err}`,
+        });
+      } finally {
+        setIsDeleting(false);
+        setSelectedIds([]);
+        loadVideos();
+      }
     }
   };
 
@@ -287,6 +411,141 @@ const VideoLibraryPage = () => {
           />
         </div>
       </div>
+
+      {/* Action Status Banner */}
+      {actionStatus && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            padding: "12px 16px",
+            background: actionStatus.type === "success" ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)",
+            border: actionStatus.type === "success" ? "1px solid rgba(16, 185, 129, 0.2)" : "1px solid rgba(239, 68, 68, 0.2)",
+            borderRadius: "var(--radius-lg)",
+            marginBottom: 20,
+            animation: "fadeIn 0.3s ease",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {actionStatus.type === "success" ? (
+              <CheckCircle size={18} style={{ color: "var(--accent-green)", flexShrink: 0 }} />
+            ) : (
+              <AlertCircle size={18} style={{ color: "var(--accent-red)", flexShrink: 0 }} />
+            )}
+            <span style={{ fontSize: 13, fontWeight: 500, color: actionStatus.type === "success" ? "var(--accent-green)" : "var(--accent-red)" }}>
+              {actionStatus.message}
+            </span>
+          </div>
+          <button
+            onClick={() => setActionStatus(null)}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              padding: 0,
+            }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* Tiến trình Tải hàng loạt (In-page Banner) */}
+      {isBulkDownloading && (
+        <div
+          className="glass-card animate-fadeIn"
+          style={{
+            padding: "16px 20px",
+            borderRadius: "var(--radius-lg)",
+            border: "1px solid rgba(139, 92, 246, 0.25)",
+            background: "rgba(139, 92, 246, 0.04)",
+            marginBottom: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <RefreshCw size={16} className="animate-spin" style={{ color: "var(--accent-purple)" }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+                Đang tải hàng loạt video...
+              </span>
+            </div>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Tiến trình: <strong>{downloadProgress.current}</strong> / <strong>{downloadProgress.total}</strong>
+            </span>
+          </div>
+
+          {/* Progress Bar */}
+          <div style={{ width: "100%", height: 6, background: "var(--border-primary)", borderRadius: "var(--radius-full)", overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${(downloadProgress.current / downloadProgress.total) * 100}%`,
+                height: "100%",
+                background: "var(--gradient-warm)",
+                borderRadius: "var(--radius-full)",
+                transition: "width 0.3s ease-out",
+              }}
+            />
+          </div>
+
+          <span style={{ fontSize: 11.5, color: "var(--text-muted)", fontStyle: "italic", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            Đang tải: {downloadProgress.currentTitle || "Khởi động..."}
+          </span>
+        </div>
+      )}
+
+      {/* Tiến trình Xóa hàng loạt (In-page Banner) */}
+      {isDeleting && (
+        <div
+          className="glass-card animate-fadeIn"
+          style={{
+            padding: "16px 20px",
+            borderRadius: "var(--radius-lg)",
+            border: "1px solid rgba(239, 68, 68, 0.25)",
+            background: "rgba(239, 68, 68, 0.04)",
+            marginBottom: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <RefreshCw size={16} className="animate-spin" style={{ color: "var(--accent-red)" }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent-red)" }}>
+                Đang xóa hàng loạt video...
+              </span>
+            </div>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Tiến trình: <strong>{downloadProgress.current}</strong> / <strong>{downloadProgress.total}</strong>
+            </span>
+          </div>
+
+          {/* Progress Bar */}
+          <div style={{ width: "100%", height: 6, background: "var(--border-primary)", borderRadius: "var(--radius-full)", overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${(downloadProgress.current / downloadProgress.total) * 100}%`,
+                height: "100%",
+                background: "linear-gradient(90deg, #ef4444 0%, #b91c1c 100%)",
+                borderRadius: "var(--radius-full)",
+                transition: "width 0.3s ease-out",
+              }}
+            />
+          </div>
+
+          <span style={{ fontSize: 11.5, color: "var(--text-muted)", fontStyle: "italic", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            Đang xóa: {downloadProgress.currentTitle || "Khởi động..."}
+          </span>
+        </div>
+      )}
 
       {/* Bulk Download Settings Bar */}
       {videos.length > 0 && (
@@ -352,23 +611,46 @@ const VideoLibraryPage = () => {
             )}
           </div>
 
-          {/* Action Download Selected */}
-          <button
-            onClick={handleBulkDownload}
-            className="btn-primary"
-            style={{
-              padding: "0 20px",
-              height: 38,
-              fontSize: 13,
-              fontWeight: 600,
-              background: "var(--gradient-warm)",
-              opacity: selectedIds.length === 0 ? 0.5 : 1,
-              pointerEvents: selectedIds.length === 0 ? "none" : "auto",
-            }}
-          >
-            <Download size={16} />
-            Tải hàng loạt ({selectedIds.length} video)
-          </button>
+          <div style={{ display: "flex", gap: 10 }}>
+            {/* Action Delete Selected */}
+            <button
+              onClick={handleBulkDelete}
+              className="btn-secondary"
+              style={{
+                padding: "0 16px",
+                height: 38,
+                fontSize: 13,
+                fontWeight: 600,
+                color: "var(--accent-red)",
+                borderColor: "rgba(239, 68, 68, 0.2)",
+                background: "rgba(239, 68, 68, 0.05)",
+                opacity: selectedIds.length === 0 ? 0.5 : 1,
+                pointerEvents: selectedIds.length === 0 ? "none" : "auto",
+                gap: 6,
+              }}
+            >
+              <Trash2 size={16} />
+              <span>Xóa đã chọn ({selectedIds.length})</span>
+            </button>
+
+            {/* Action Download Selected */}
+            <button
+              onClick={handleBulkDownload}
+              className="btn-primary"
+              style={{
+                padding: "0 20px",
+                height: 38,
+                fontSize: 13,
+                fontWeight: 600,
+                background: "var(--gradient-warm)",
+                opacity: selectedIds.length === 0 ? 0.5 : 1,
+                pointerEvents: selectedIds.length === 0 ? "none" : "auto",
+              }}
+            >
+              <Download size={16} />
+              Tải hàng loạt ({selectedIds.length} video)
+            </button>
+          </div>
         </div>
       )}
 
@@ -385,7 +667,7 @@ const VideoLibraryPage = () => {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
             gap: 20,
           }}
         >
@@ -538,18 +820,15 @@ const VideoLibraryPage = () => {
                   {/* Action Buttons */}
                   <div style={{ display: "flex", gap: 8, marginTop: "auto", paddingTop: 10, borderTop: "1px solid var(--border-primary)" }}>
                     {/* Tải về */}
-                    <a
-                      href={video.videoMetadata.videoUrl}
-                      download={`${video.platform}_${video.videoMetadata.id}.mp4`}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      onClick={() => handleSingleDownload(video)}
                       className="btn-secondary"
                       style={{ padding: "6px 12px", fontSize: 12, flex: 1, justifyContent: "center", height: 32 }}
-                      title="Tải về máy tính"
+                      title="Tải về máy tính (Yêu cầu chọn thư mục)"
                     >
                       <Download size={14} />
                       Tải về
-                    </a>
+                    </button>
 
                     {/* Xem gốc */}
                     <a
@@ -588,7 +867,7 @@ const VideoLibraryPage = () => {
       )}
 
       {/* Video Lightbox Player */}
-      {lightboxVideo && (
+      {mounted && lightboxVideo && createPortal(
         <div
           style={{
             position: "fixed",
@@ -645,85 +924,11 @@ const VideoLibraryPage = () => {
               style={{ width: "100%", height: "100%", objectFit: "contain" }}
             />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Bulk Download Progress Modal */}
-      {isBulkDownloading && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0, 0, 0, 0.8)",
-            backdropFilter: "blur(6px)",
-            zIndex: 200,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 20,
-          }}
-        >
-          <div
-            className="glass-card animate-scaleIn"
-            style={{
-              maxWidth: 480,
-              width: "100%",
-              padding: "32px 24px",
-              textAlign: "center",
-              borderRadius: "var(--radius-xl)",
-              border: "1px solid rgba(139, 92, 246, 0.2)",
-              background: "linear-gradient(180deg, rgba(30, 30, 46, 0.98), rgba(20, 20, 30, 0.99))",
-            }}
-          >
-            <RefreshCw
-              size={32}
-              className="animate-spin"
-              style={{ color: "var(--accent-purple)", margin: "0 auto 16px" }}
-            />
-            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
-              Đang tải hàng loạt video...
-            </h3>
-            <p style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 20 }}>
-              Tiến trình: <strong>{downloadProgress.current}</strong> / <strong>{downloadProgress.total}</strong>
-            </p>
-            
-            {/* Progress Bar Container */}
-            <div
-              style={{
-                width: "100%",
-                height: 8,
-                background: "var(--border-primary)",
-                borderRadius: "var(--radius-full)",
-                overflow: "hidden",
-                marginBottom: 16,
-              }}
-            >
-              <div
-                style={{
-                  width: `${(downloadProgress.current / downloadProgress.total) * 100}%`,
-                  height: "100%",
-                  background: "var(--gradient-warm)",
-                  borderRadius: "var(--radius-full)",
-                  transition: "width 0.3s ease-out",
-                }}
-              />
-            </div>
 
-            <p
-              style={{
-                fontSize: 12,
-                color: "var(--text-muted)",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                fontStyle: "italic",
-              }}
-            >
-              Đang tải: {downloadProgress.currentTitle || "Khởi động..."}
-            </p>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

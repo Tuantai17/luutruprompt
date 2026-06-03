@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { db, deleteImage, type ImageRecord } from "@/lib/db";
 import { useAppStore } from "@/lib/store";
 import {
@@ -352,30 +353,35 @@ const GalleryPage = () => {
       )}
 
       {/* Upload Modal */}
-      <UploadModal
-        open={uploadModalOpen}
-        onClose={() => setUploadModalOpen(false)}
-        onComplete={loadImages}
-      />
+      {mounted && uploadModalOpen && createPortal(
+        <UploadModal
+          open={uploadModalOpen}
+          onClose={() => setUploadModalOpen(false)}
+          onComplete={loadImages}
+        />,
+        document.body
+      )}
 
       {/* Lightbox */}
-      {lightboxId && (
+      {mounted && lightboxId && createPortal(
         <Lightbox
           images={images}
           currentId={lightboxId}
           onClose={() => setLightboxId(null)}
           onDelete={handleDelete}
           onUpdate={loadImages}
-        />
+        />,
+        document.body
       )}
 
       {/* Image Compare Modal */}
-      {compareImages && (
+      {mounted && compareImages && createPortal(
         <ImageCompare
           imageA={compareImages[0]}
           imageB={compareImages[1]}
           onClose={() => setCompareImages(null)}
-        />
+        />,
+        document.body
       )}
     </div>
   );

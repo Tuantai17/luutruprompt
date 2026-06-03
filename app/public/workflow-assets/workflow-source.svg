@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200" role="img" aria-label="Elevator mirror selfie source image">
+  <defs>
+    <linearGradient id="wall" x1="0" x2="1">
+      <stop offset="0" stop-color="#252629"/>
+      <stop offset="0.5" stop-color="#8c8b84"/>
+      <stop offset="1" stop-color="#27282b"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#d8d1c4"/>
+      <stop offset="1" stop-color="#8f8375"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="1200" fill="#111214"/>
+  <rect x="90" y="55" width="720" height="980" rx="26" fill="url(#wall)"/>
+  <rect x="112" y="75" width="676" height="940" rx="18" fill="#5c5c5c" opacity=".22"/>
+  <path d="M450 80v925" stroke="#e8e6dd" stroke-width="4" opacity=".45"/>
+  <rect x="120" y="835" width="660" height="210" fill="url(#floor)"/>
+  <rect x="128" y="142" width="72" height="420" rx="12" fill="#222326" opacity=".85"/>
+  <g fill="#d7d5cc" opacity=".75">
+    <circle cx="164" cy="205" r="10"/><circle cx="164" cy="250" r="10"/><circle cx="164" cy="295" r="10"/><circle cx="164" cy="340" r="10"/>
+    <circle cx="164" cy="385" r="10"/><circle cx="164" cy="430" r="10"/><circle cx="164" cy="475" r="10"/><circle cx="164" cy="520" r="10"/>
+  </g>
+  <rect x="212" y="120" width="70" height="175" rx="10" fill="#0f2030"/>
+  <rect x="225" y="145" width="44" height="90" rx="4" fill="#36a9ff"/>
+  <g transform="translate(0 20)">
+    <path d="M420 340c-75 18-118 86-125 180l-22 305h304l-22-305c-7-94-50-162-125-180z" fill="#f1ead8"/>
+    <path d="M343 522c-46 67-70 153-70 261h89c11-70 27-143 48-219z" fill="#eee4cf"/>
+    <path d="M507 522c45 67 70 153 70 261h-89c-11-70-27-143-48-219z" fill="#e8dcc4"/>
+    <path d="M374 777h105l22 250h-54l-21-166-34 166h-54z" fill="#e1c5a6"/>
+    <path d="M341 1017h77v38h-82zM445 1017h73v38h-82z" fill="#5b4f44"/>
+    <circle cx="425" cy="284" r="58" fill="#d9b18f"/>
+    <path d="M360 278c5-68 49-104 100-92 65 14 82 70 62 127-40-22-97-45-162-35z" fill="#161313"/>
+    <path d="M369 218c-34 39-36 111-6 159 20-54 76-106 146-130-31-30-91-56-140-29z" fill="#201817"/>
+    <rect x="417" y="288" width="65" height="92" rx="14" fill="#f4f4f4"/>
+    <circle cx="449" cy="326" r="10" fill="#1b1b1f"/>
+  </g>
+</svg>
