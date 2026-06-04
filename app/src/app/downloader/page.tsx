@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabaseClient";
-import { db, deletePrompt, deleteImage, type Prompt } from "@/lib/db";
+import { db, createPrompt, type Prompt } from "@/lib/db";
 import { useDriveSyncStore } from "@/lib/driveSyncStore";
 import {
   Download,
@@ -142,18 +142,39 @@ const DownloaderPage = () => {
     }
   };
 
+  const getHiddenHistoryIds = (): string[] => {
+    if (typeof window === "undefined") return [];
+    try {
+      const stored = localStorage.getItem("pv_hidden_history_ids");
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const hideHistoryIds = (ids: string[]) => {
+    if (typeof window === "undefined") return;
+    try {
+      const current = getHiddenHistoryIds();
+      const updated = Array.from(new Set([...current, ...ids]));
+      localStorage.setItem("pv_hidden_history_ids", JSON.stringify(updated));
+    } catch (e) {
+      console.error("Failed to save hidden history IDs:", e);
+    }
+  };
+
   const handleDeleteHistoryItem = async (id: string) => {
     const item = downloadHistory.find((x) => x.id === id);
     if (!item) return;
 
     const typeLabel = item.type === "image" ? "ảnh" : "video";
-    if (confirm(`Bạn có chắc chắn muốn xóa ${typeLabel} này khỏi lịch sử tải và giải phóng bộ nhớ Cloud?`)) {
+    if (
+      confirm(
+        `Bạn có chắc chắn muốn xóa ${typeLabel} này khỏi lịch sử tải về? (Lưu ý: Thao tác này chỉ ẩn lịch sử ghi nhớ quan sát trên trình duyệt của bạn, hoàn toàn không xóa tệp gốc trong cơ sở dữ liệu và không ảnh hưởng đến các trang khác như Thư viện ảnh hay Kho video)`
+      )
+    ) {
       try {
-        if (item.type === "image") {
-          await deleteImage(id);
-        } else {
-          await deletePrompt(id);
-        }
+        hideHistoryIds([id]);
         setSelectedHistoryIds((prev) => prev.filter((x) => x !== id));
         fetchLatestHistory();
       } catch (err: any) {
@@ -166,21 +187,12 @@ const DownloaderPage = () => {
     if (selectedHistoryIds.length === 0) return;
     if (
       confirm(
-        `Bạn có chắc chắn muốn xóa ${selectedHistoryIds.length} lịch sử tải đã chọn? (Điều này cũng sẽ xóa video/ảnh trên Cloud Storage tương ứng)`
+        `Bạn có chắc chắn muốn xóa ${selectedHistoryIds.length} lịch sử tải đã chọn? (Lưu ý: Thao tác này chỉ ẩn lịch sử ghi nhớ quan sát trên trình duyệt của bạn, hoàn toàn không xóa tệp gốc trong cơ sở dữ liệu và không ảnh hưởng đến các trang khác)`
       )
     ) {
       setIsDeletingHistory(true);
       try {
-        for (const id of selectedHistoryIds) {
-          const item = downloadHistory.find((x) => x.id === id);
-          if (item) {
-            if (item.type === "image") {
-              await deleteImage(id);
-            } else {
-              await deletePrompt(id);
-            }
-          }
-        }
+        hideHistoryIds(selectedHistoryIds);
         setSelectedHistoryIds([]);
         fetchLatestHistory();
       } catch (err: any) {
@@ -223,31 +235,34 @@ const DownloaderPage = () => {
       const uId = userIdStr || currentUserId;
       if (!uId) return;
 
-      // 1. Fetch 10 videos mới nhất
+      // 1. Fetch 20 videos mới nhất
       const { data: videoData, error: videoErr } = await supabase
         .from("prompts")
         .select("*")
         .eq("user_id", uId)
         .eq("type", "video")
         .order("createdAt", { ascending: false })
-        .limit(10);
+        .limit(20);
 
       if (videoErr) throw videoErr;
 
-      // 2. Fetch 10 ảnh mới nhất
+      // 2. Fetch 20 ảnh mới nhất
       const { data: imageData, error: imageErr } = await supabase
         .from("images")
         .select("*")
         .eq("user_id", uId)
         .order("createdAt", { ascending: false })
-        .limit(10);
+        .limit(20);
 
       if (imageErr) throw imageErr;
 
       const mergedHistory: DownloadResult[] = [];
+      const hiddenIds = getHiddenHistoryIds();
 
       if (videoData) {
         videoData.forEach((row: any) => {
+          if (hiddenIds.includes(row.id)) return;
+          
           let metadata = { id: row.id, videoUrl: "", thumbnailUrl: "", originUrl: "", creator: row.creator || "Tác giả", platform: "other", duration: 0 };
           try {
             if (row.notes) {
@@ -276,6 +291,8 @@ const DownloaderPage = () => {
 
       if (imageData) {
         imageData.forEach((row: any) => {
+          if (hiddenIds.includes(row.id)) return;
+
           mergedHistory.push({
             id: row.id,
             title: row.title || "Ảnh đồng bộ",
