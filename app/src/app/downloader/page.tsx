@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabaseClient";
-import { createPrompt, deletePrompt } from "@/lib/db";
+import { db, deletePrompt, deleteImage, type Prompt } from "@/lib/db";
 import { useDriveSyncStore } from "@/lib/driveSyncStore";
 import {
   Download,
@@ -48,6 +48,7 @@ interface DownloadResult {
   platform: string;
   duration: number;
   createdAt?: string;
+  type?: "video" | "image";
 }
 
 interface BatchItem {
@@ -141,11 +142,19 @@ const DownloaderPage = () => {
     }
   };
 
-  const handleDeleteHistoryItem = async (promptId: string) => {
-    if (confirm("Bạn có chắc chắn muốn xóa video này khỏi lịch sử tải và giải phóng bộ nhớ Cloud?")) {
+  const handleDeleteHistoryItem = async (id: string) => {
+    const item = downloadHistory.find((x) => x.id === id);
+    if (!item) return;
+
+    const typeLabel = item.type === "image" ? "ảnh" : "video";
+    if (confirm(`Bạn có chắc chắn muốn xóa ${typeLabel} này khỏi lịch sử tải và giải phóng bộ nhớ Cloud?`)) {
       try {
-        await deletePrompt(promptId);
-        setSelectedHistoryIds((prev) => prev.filter((id) => id !== promptId));
+        if (item.type === "image") {
+          await deleteImage(id);
+        } else {
+          await deletePrompt(id);
+        }
+        setSelectedHistoryIds((prev) => prev.filter((x) => x !== id));
         fetchLatestHistory();
       } catch (err: any) {
         alert(`Không thể xóa: ${err.message || err}`);
@@ -157,13 +166,20 @@ const DownloaderPage = () => {
     if (selectedHistoryIds.length === 0) return;
     if (
       confirm(
-        `Bạn có chắc chắn muốn xóa ${selectedHistoryIds.length} lịch sử tải đã chọn? (Điều này cũng sẽ xóa video trên Cloud Storage tương ứng)`
+        `Bạn có chắc chắn muốn xóa ${selectedHistoryIds.length} lịch sử tải đã chọn? (Điều này cũng sẽ xóa video/ảnh trên Cloud Storage tương ứng)`
       )
     ) {
       setIsDeletingHistory(true);
       try {
         for (const id of selectedHistoryIds) {
-          await deletePrompt(id);
+          const item = downloadHistory.find((x) => x.id === id);
+          if (item) {
+            if (item.type === "image") {
+              await deleteImage(id);
+            } else {
+              await deletePrompt(id);
+            }
+          }
         }
         setSelectedHistoryIds([]);
         fetchLatestHistory();
@@ -201,23 +217,37 @@ const DownloaderPage = () => {
     }
   }, [syncLogs]);
 
-  // Hàm load lịch sử tải từ database Supabase (bảng prompts)
+  // Hàm load lịch sử tải từ database Supabase (cả bảng prompts - video và bảng images - ảnh)
   const fetchLatestHistory = async (userIdStr?: string) => {
     try {
       const uId = userIdStr || currentUserId;
       if (!uId) return;
 
-      const { data, error: dbErr } = await supabase
+      // 1. Fetch 10 videos mới nhất
+      const { data: videoData, error: videoErr } = await supabase
         .from("prompts")
         .select("*")
+        .eq("user_id", uId)
         .eq("type", "video")
         .order("createdAt", { ascending: false })
         .limit(10);
 
-      if (dbErr) throw dbErr;
+      if (videoErr) throw videoErr;
 
-      if (data) {
-        const history: DownloadResult[] = data.map((row: any) => {
+      // 2. Fetch 10 ảnh mới nhất
+      const { data: imageData, error: imageErr } = await supabase
+        .from("images")
+        .select("*")
+        .eq("user_id", uId)
+        .order("createdAt", { ascending: false })
+        .limit(10);
+
+      if (imageErr) throw imageErr;
+
+      const mergedHistory: DownloadResult[] = [];
+
+      if (videoData) {
+        videoData.forEach((row: any) => {
           let metadata = { id: row.id, videoUrl: "", thumbnailUrl: "", originUrl: "", creator: row.creator || "Tác giả", platform: "other", duration: 0 };
           try {
             if (row.notes) {
@@ -229,7 +259,7 @@ const DownloaderPage = () => {
           } catch (e) {
             console.error("Error parsing video metadata from DB notes:", e);
           }
-          return {
+          mergedHistory.push({
             id: row.id,
             title: row.title,
             videoUrl: metadata.videoUrl || "",
@@ -239,10 +269,37 @@ const DownloaderPage = () => {
             platform: metadata.platform || "other",
             duration: metadata.duration || 0,
             createdAt: row.createdAt,
-          };
+            type: "video",
+          });
         });
-        setDownloadHistory(history);
       }
+
+      if (imageData) {
+        imageData.forEach((row: any) => {
+          mergedHistory.push({
+            id: row.id,
+            title: row.title || "Ảnh đồng bộ",
+            videoUrl: row.imageUrl || "", // Dùng chung field URL cho ảnh
+            thumbnailUrl: row.thumbnailUrl || row.imageUrl || "",
+            originUrl: "",
+            creator: row.creator || "Drive Sync",
+            platform: "image",
+            duration: 0,
+            createdAt: row.createdAt,
+            type: "image",
+          });
+        });
+      }
+
+      // Sắp xếp gộp theo thời gian giảm dần
+      mergedHistory.sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return timeB - timeA;
+      });
+
+      // Lấy tối đa 10 phần tử
+      setDownloadHistory(mergedHistory.slice(0, 10));
     } catch (err) {
       console.error("Failed to load download history from Supabase:", err);
     }
@@ -1368,18 +1425,20 @@ const DownloaderPage = () => {
                         e.currentTarget.src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=200";
                       }}
                     />
-                    <div
-                      style={{
-                        position: "absolute",
-                        inset: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: "rgba(0,0,0,0.3)",
-                      }}
-                    >
-                      <Play size={16} color="white" fill="white" />
-                    </div>
+                    {item.type !== "image" && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: "rgba(0,0,0,0.3)",
+                        }}
+                      >
+                        <Play size={16} color="white" fill="white" />
+                      </div>
+                    )}
                   </div>
 
                   {/* Info */}
@@ -1394,13 +1453,13 @@ const DownloaderPage = () => {
                         textOverflow: "ellipsis",
                       }}
                     >
-                      {item.title || "Video đã tải"}
+                      {item.title || (item.type === "image" ? "Ảnh đồng bộ" : "Video đã tải")}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 8 }}>
                       <span>{item.creator}</span>
                       <span>•</span>
-                      <span style={{ textTransform: "uppercase" }}>{item.platform}</span>
-                      {item.duration > 0 && (
+                      <span style={{ textTransform: "uppercase" }}>{item.type === "image" ? "Ảnh" : item.platform}</span>
+                      {item.type !== "image" && item.duration > 0 && (
                         <>
                           <span>•</span>
                           <span>{item.duration}s</span>
@@ -1419,7 +1478,7 @@ const DownloaderPage = () => {
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
                     <a
                       href={item.videoUrl}
-                      download={`${item.platform}_${item.id}.mp4`}
+                      download={item.type === "image" ? `${item.id}.png` : `${item.platform}_${item.id}.mp4`}
                       target="_blank"
                       rel="noreferrer"
                       className="btn-icon"
@@ -1429,17 +1488,19 @@ const DownloaderPage = () => {
                     >
                       <Download size={16} />
                     </a>
-                    <a
-                      href={item.originUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn-icon"
-                      style={{ color: "var(--accent-cyan)", flexShrink: 0 }}
-                      onClick={(e) => e.stopPropagation()}
-                      title="Xem gốc"
-                    >
-                      <ExternalLink size={15} />
-                    </a>
+                    {item.type !== "image" && item.originUrl && (
+                      <a
+                        href={item.originUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn-icon"
+                        style={{ color: "var(--accent-cyan)", flexShrink: 0 }}
+                        onClick={(e) => e.stopPropagation()}
+                        title="Xem gốc"
+                      >
+                        <ExternalLink size={15} />
+                      </a>
+                    )}
                     <button
                       className="btn-icon"
                       style={{ color: "var(--accent-red)", flexShrink: 0, background: "none", border: "none", cursor: "pointer", padding: 0 }}
@@ -1512,12 +1573,26 @@ const DownloaderPage = () => {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <video
-              src={lightboxVideo}
-              autoPlay
-              controls
-              style={{ maxHeight: "85vh", maxWidth: "100%", objectFit: "contain" }}
-            />
+            {lightboxVideo && (
+              lightboxVideo.includes(".jpg") ||
+              lightboxVideo.includes(".jpeg") ||
+              lightboxVideo.includes(".png") ||
+              lightboxVideo.includes(".webp") ||
+              downloadHistory.find(item => item.videoUrl === lightboxVideo)?.type === "image"
+            ) ? (
+              <img
+                src={lightboxVideo}
+                alt="Hình ảnh"
+                style={{ maxHeight: "85vh", maxWidth: "100%", objectFit: "contain" }}
+              />
+            ) : (
+              <video
+                src={lightboxVideo}
+                autoPlay
+                controls
+                style={{ maxHeight: "85vh", maxWidth: "100%", objectFit: "contain" }}
+              />
+            )}
           </div>
         </div>,
         document.body
