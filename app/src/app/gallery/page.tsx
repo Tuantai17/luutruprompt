@@ -18,6 +18,8 @@ import {
   Check,
   X,
   Copy,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 import UploadModal from "@/components/gallery/UploadModal";
 import Lightbox from "@/components/gallery/Lightbox";
@@ -33,6 +35,12 @@ const GalleryPage = () => {
   const [isCompareMode, setIsCompareMode] = useState(false);
   const [selectedCompareIds, setSelectedCompareIds] = useState<string[]>([]);
   const [compareImages, setCompareImages] = useState<[ImageRecord, ImageRecord] | null>(null);
+
+  // --- Batch Mode (Bulk Delete) States ---
+  const [isBatchMode, setIsBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteProgress, setDeleteProgress] = useState({ current: 0, total: 0 });
 
   const {
     galleryView,
@@ -92,6 +100,46 @@ const GalleryPage = () => {
   const handleCancelCompareMode = () => {
     setIsCompareMode(false);
     setSelectedCompareIds([]);
+  };
+
+  const handleSelectBatch = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.length === images.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(images.map((img) => img.id));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    if (
+      confirm(
+        `Bạn có chắc chắn muốn xóa ${selectedIds.length} ảnh đã chọn khỏi thư viện? (Lưu ý: Hành động này cũng sẽ xóa ảnh tương ứng trong cơ sở dữ liệu)`
+      )
+    ) {
+      setIsDeleting(true);
+      setDeleteProgress({ current: 0, total: selectedIds.length });
+      try {
+        for (let i = 0; i < selectedIds.length; i++) {
+          const id = selectedIds[i];
+          setDeleteProgress((prev) => ({ ...prev, current: i + 1 }));
+          await deleteImage(id);
+        }
+        setSelectedIds([]);
+        setIsBatchMode(false);
+        loadImages();
+      } catch (err: any) {
+        alert(`Có lỗi xảy ra khi xóa hàng loạt: ${err.message || err}`);
+      } finally {
+        setIsDeleting(false);
+      }
+    }
   };
 
   const effectiveGalleryView = isMobileViewport ? "grid" : galleryView;
@@ -209,6 +257,44 @@ const GalleryPage = () => {
         </div>
       </div>
 
+      {/* Tiến trình Xóa hàng loạt (In-page Banner) */}
+      {isDeleting && (
+        <div
+          className="glass-card animate-fadeIn"
+          style={{
+            padding: "16px 20px",
+            borderRadius: "var(--radius-lg)",
+            border: "1px solid rgba(239, 68, 68, 0.25)",
+            background: "rgba(239, 68, 68, 0.04)",
+            marginBottom: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent-red)" }}>
+              Đang xóa hàng loạt ảnh khỏi thư viện...
+            </span>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Tiến trình: <strong>{deleteProgress.current}</strong> / <strong>{deleteProgress.total}</strong>
+            </span>
+          </div>
+
+          <div style={{ width: "100%", height: 6, background: "var(--border-primary)", borderRadius: "var(--radius-full)", overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${(deleteProgress.current / deleteProgress.total) * 100}%`,
+                height: "100%",
+                background: "linear-gradient(90deg, #ef4444 0%, #b91c1c 100%)",
+                borderRadius: "var(--radius-full)",
+                transition: "width 0.2s ease-out",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Gallery */}
       {images.length === 0 ? (
         <div className="empty-state" style={{ minHeight: 400 }}>
@@ -257,6 +343,9 @@ const GalleryPage = () => {
               isCompareMode={isCompareMode}
               isSelected={selectedCompareIds.includes(img.id)}
               onSelectCompare={() => handleSelectCompare(img.id)}
+              isBatchMode={isBatchMode}
+              isBatchSelected={selectedIds.includes(img.id)}
+              onSelectBatch={() => handleSelectBatch(img.id)}
               style={{ animationDelay: `${idx * 0.05}s` }}
             />
           ))}
@@ -278,6 +367,9 @@ const GalleryPage = () => {
               isCompareMode={isCompareMode}
               isSelected={selectedCompareIds.includes(img.id)}
               onSelectCompare={() => handleSelectCompare(img.id)}
+              isBatchMode={isBatchMode}
+              isBatchSelected={selectedIds.includes(img.id)}
+              onSelectBatch={() => handleSelectBatch(img.id)}
               gridMode
               style={{ animationDelay: `${idx * 0.05}s` }}
             />
@@ -352,6 +444,86 @@ const GalleryPage = () => {
         </div>
       )}
 
+      {/* Floating Batch Action Bar */}
+      {isBatchMode && (
+        <div
+          className="glass-card animate-scaleIn"
+          style={{
+            position: "fixed",
+            bottom: 20,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: "90%",
+            maxWidth: 580,
+            padding: "12px 24px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            zIndex: 100,
+            border: "1px solid var(--accent-red)",
+            boxShadow: "0 10px 30px rgba(239, 68, 68, 0.2)",
+            background: "rgba(15, 23, 42, 0.85)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: "50%",
+                background: "rgba(239, 68, 68, 0.2)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "var(--accent-red)",
+                fontWeight: 600,
+                fontSize: 12,
+              }}
+            >
+              {selectedIds.length}
+            </div>
+            <span style={{ fontSize: 14, fontWeight: 500 }}>
+              Đang chọn ảnh để xóa ({selectedIds.length} đã chọn)
+            </span>
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn-secondary"
+              onClick={toggleSelectAll}
+              style={{ padding: "8px 12px", fontSize: 13 }}
+            >
+              {selectedIds.length === images.length ? "Bỏ chọn hết" : "Chọn tất cả"}
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => {
+                setIsBatchMode(false);
+                setSelectedIds([]);
+              }}
+              style={{ padding: "8px 12px", fontSize: 13 }}
+            >
+              Hủy
+            </button>
+            <button
+              className="btn-primary"
+              disabled={selectedIds.length === 0 || isDeleting}
+              onClick={handleBulkDelete}
+              style={{
+                padding: "8px 16px",
+                background: "var(--gradient-warm)",
+                opacity: selectedIds.length > 0 ? 1 : 0.5,
+                cursor: selectedIds.length > 0 ? "pointer" : "not-allowed",
+                borderColor: "var(--accent-red)",
+                color: "white",
+              }}
+            >
+              {isDeleting ? "Đang xóa..." : `Xóa (${selectedIds.length})`}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Upload Modal */}
       {mounted && uploadModalOpen && createPortal(
         <UploadModal
@@ -397,6 +569,9 @@ const ImageCard = ({
   isCompareMode,
   isSelected,
   onSelectCompare,
+  isBatchMode,
+  isBatchSelected,
+  onSelectBatch,
 }: {
   image: ImageRecord;
   onClick: () => void;
@@ -406,6 +581,9 @@ const ImageCard = ({
   isCompareMode?: boolean;
   isSelected?: boolean;
   onSelectCompare?: () => void;
+  isBatchMode?: boolean;
+  isBatchSelected?: boolean;
+  onSelectBatch?: () => void;
 }) => {
   const [thumbUrl, setThumbUrl] = useState<string>("");
   const [showMenu, setShowMenu] = useState(false);
@@ -426,6 +604,8 @@ const ImageCard = ({
   const handleCardClick = () => {
     if (isCompareMode && onSelectCompare) {
       onSelectCompare();
+    } else if (isBatchMode && onSelectBatch) {
+      onSelectBatch();
     } else {
       onClick();
     }
@@ -439,8 +619,8 @@ const ImageCard = ({
         overflow: "hidden",
         cursor: "pointer",
         position: "relative",
-        border: isSelected ? "2px solid var(--accent-purple)" : "1px solid var(--border-primary)",
-        boxShadow: isSelected ? "0 0 15px rgba(139,92,246,0.3)" : "none",
+        border: (isCompareMode ? isSelected : isBatchSelected) ? "2px solid var(--accent-purple)" : "1px solid var(--border-primary)",
+        boxShadow: (isCompareMode ? isSelected : isBatchSelected) ? "0 0 15px rgba(139,92,246,0.3)" : "none",
         ...style,
       }}
       onMouseEnter={() => setShowMenu(true)}
@@ -468,20 +648,20 @@ const ImageCard = ({
               transition: "transform var(--transition-slow)",
             }}
             onMouseEnter={(e) => {
-              if (!isCompareMode) {
+              if (!isCompareMode && !isBatchMode) {
                 e.currentTarget.style.transform = "scale(1.06)";
               }
             }}
             onMouseLeave={(e) => {
-              if (!isCompareMode) {
+              if (!isCompareMode && !isBatchMode) {
                 e.currentTarget.style.transform = "scale(1)";
               }
             }}
           />
         )}
 
-        {/* Compare Checkbox Badge */}
-        {isCompareMode && (
+        {/* Checkbox Badge for Compare Mode or Batch Delete Mode */}
+        {(isCompareMode || isBatchMode) && (
           <div
             style={{
               position: "absolute",
@@ -490,8 +670,8 @@ const ImageCard = ({
               width: 24,
               height: 24,
               borderRadius: "50%",
-              background: isSelected ? "var(--accent-purple)" : "rgba(15,23,42,0.6)",
-              border: `2px solid ${isSelected ? "var(--accent-cyan)" : "rgba(255,255,255,0.6)"}`,
+              background: (isCompareMode ? isSelected : isBatchSelected) ? "var(--accent-purple)" : "rgba(15,23,42,0.6)",
+              border: `2px solid ${(isCompareMode ? isSelected : isBatchSelected) ? "var(--accent-cyan)" : "rgba(255,255,255,0.6)"}`,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -500,12 +680,12 @@ const ImageCard = ({
               transition: "all var(--transition-fast)",
             }}
           >
-            {isSelected && <Check size={12} color="white" strokeWidth={3} />}
+            {(isCompareMode ? isSelected : isBatchSelected) && <Check size={12} color="white" strokeWidth={3} />}
           </div>
         )}
 
-        {/* Hover overlay (only show when not in compare mode) */}
-        {!isCompareMode && (
+        {/* Hover overlay (only show when not in compare mode and not in batch mode) */}
+        {!isCompareMode && !isBatchMode && (
           <div
             style={{
               position: "absolute",
@@ -590,7 +770,7 @@ const ImageCard = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Prompt</span>
-              {!isCompareMode && <QuickCopyButton text={image.prompt} />}
+              {!isCompareMode && !isBatchMode && <QuickCopyButton text={image.prompt} />}
             </div>
             <div
               style={{
@@ -622,7 +802,7 @@ const ImageCard = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Negative Prompt</span>
-              {!isCompareMode && <QuickCopyButton text={image.negativePrompt} />}
+              {!isCompareMode && !isBatchMode && <QuickCopyButton text={image.negativePrompt} />}
             </div>
             <div
               style={{
