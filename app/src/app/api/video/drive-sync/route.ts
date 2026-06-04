@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { v2 as cloudinary } from "cloudinary";
 import { google } from "googleapis";
+import { parseImageBufferMetadata } from "@/lib/metadataExtractor";
 
 // Lấy thông tin cấu hình từ môi trường
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
@@ -138,6 +139,47 @@ function parseUrls(text: string): string[] {
         lowercase.includes("x.com")
       );
     });
+}
+
+// Hàm đọc kích thước ảnh từ binary header (PNG/JPEG)
+function getImageDimensions(buffer: Buffer, ext: string): { width: number; height: number } {
+  try {
+    if (ext === "png" && buffer.length >= 24) {
+      // PNG width is at offset 16-19, height is at 20-23
+      const width = buffer.readUInt32BE(16);
+      const height = buffer.readUInt32BE(20);
+      return { width, height };
+    }
+    if ((ext === "jpg" || ext === "jpeg") && buffer.length >= 4) {
+      let offset = 2;
+      while (offset + 4 < buffer.length) {
+        // Read marker
+        const marker = buffer.readUInt16BE(offset);
+        offset += 2;
+        
+        // SOF0 (Start Of Frame 0) marker is 0xFFC0, SOF2 is 0xFFC2
+        if (marker === 0xFFC0 || marker === 0xFFC2) {
+          if (offset + 7 <= buffer.length) {
+            // Height is at offset + 3 (2 bytes), width is at offset + 5 (2 bytes)
+            const height = buffer.readUInt16BE(offset + 3);
+            const width = buffer.readUInt16BE(offset + 5);
+            return { width, height };
+          }
+          break;
+        }
+        
+        // Read segment length and skip it
+        const length = buffer.readUInt16BE(offset);
+        if (length < 2) {
+          break; // Tránh lặp vô hạn nếu length = 0 hoặc không hợp lệ
+        }
+        offset += length;
+      }
+    }
+  } catch (e) {
+    console.error("Failed to get image dimensions:", e);
+  }
+  return { width: 0, height: 0 };
 }
 
 // Cố gắng lấy video qua Cobalt API
@@ -341,6 +383,8 @@ export async function POST(request: NextRequest) {
     }
 
     let totalDownloaded = 0;
+    let downloadedVideosCount = 0;
+    let downloadedImagesCount = 0;
     let totalUrlsCount = 0;
     let duplicateCount = 0;
     let failedCount = 0;
@@ -353,235 +397,322 @@ export async function POST(request: NextRequest) {
       addLog(`Đang xử lý file: "${fileName}" (MIME: ${fileMime}, ID: ${fileId})`);
 
       try {
-        // Tải nội dung tệp tin Drive dưới dạng văn bản
-        const fileContentResponse = await drive.files.get({
-          fileId: fileId!,
-          alt: "media",
-        });
+        // Tải nội dung tệp tin Drive dưới dạng ArrayBuffer
+        const fileContentResponse = await drive.files.get(
+          { fileId: fileId!, alt: "media" },
+          { responseType: "arraybuffer" }
+        );
 
-        let content = "";
-        if (typeof fileContentResponse.data === "string") {
-          content = fileContentResponse.data;
-        } else if (fileContentResponse.data) {
-          content = JSON.stringify(fileContentResponse.data);
-        }
+        const fileBuffer = Buffer.from(fileContentResponse.data as ArrayBuffer);
+        const isImage = fileMime.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(fileName);
 
-        // Trích xuất URL từ cả nội dung file VÀ tên file
-        const contentUrls = parseUrls(content);
-        const fileNameUrls = parseUrls(fileName || "");
-        
-        // Gộp và loại trùng
-        const allUrlsSet = new Set([...contentUrls, ...fileNameUrls]);
-        const urls = Array.from(allUrlsSet);
-        totalUrlsCount += urls.length;
-        
-        addLog(`Tìm thấy ${urls.length} link video trong file "${fileName}".`);
+        if (isImage) {
+          addLog(`Đang xử lý ảnh: "${fileName}"...`);
+          // 1. Trích xuất metadata từ ArrayBuffer gốc của ảnh
+          const meta = parseImageBufferMetadata(fileContentResponse.data as ArrayBuffer, fileName);
+          
+          // 2. Lấy kích thước ảnh
+          const ext = fileName.toLowerCase().split(".").pop() || "png";
+          const dimensions = getImageDimensions(fileBuffer, ext);
+          
+          // 3. Upload ảnh lên Supabase Storage (hoặc Cloudinary/R2 nếu được config)
+          const imageId = crypto.randomUUID();
+          const imagePath = `${userId}/${imageId}.${ext}`;
+          const cleanContentType = isImage ? fileMime : `image/${ext}`;
+          let savedImageUrl = "";
 
-        // Định nghĩa hàm xử lý song song cho từng URL
-        const processUrl = async (url: string) => {
-          const addUrlLog = (msg: string) => {
-            const time = new Date().toLocaleTimeString();
-            const logLine = `[${time}] [Link: ${url.substring(0, 35)}...] ${msg}`;
-            console.log(`[Drive Sync] ${logLine}`);
-            syncLogs.push(logLine);
-            activeSyncLogs.push(logLine); // Đẩy trực tiếp để client polling
-          };
+          // Thử upload lên Cloudinary hoặc R2 trước, nếu không được thì fallback Supabase Storage
+          if (isCloudinaryConfigured) {
+            try {
+              savedImageUrl = await uploadToCloudinary(fileBuffer, `images/${userId}`, "image");
+            } catch (cloudinaryErr: any) {
+              addLog(`⚠️ Cloudinary upload lỗi: ${cloudinaryErr.message}. Fallback sang Supabase Storage.`);
+              const { error: uploadError } = await supabaseClient.storage.from("images").upload(imagePath, fileBuffer, { contentType: cleanContentType, upsert: true });
+              if (uploadError) throw uploadError;
+              const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(imagePath);
+              savedImageUrl = urlData.publicUrl;
+            }
+          } else if (isR2Configured) {
+            try {
+              savedImageUrl = await uploadToR2(imagePath, fileBuffer, cleanContentType);
+            } catch (r2Err: any) {
+              addLog(`⚠️ R2 upload lỗi: ${r2Err.message}. Fallback sang Supabase Storage.`);
+              const { error: uploadError } = await supabaseClient.storage.from("images").upload(imagePath, fileBuffer, { contentType: cleanContentType, upsert: true });
+              if (uploadError) throw uploadError;
+              const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(imagePath);
+              savedImageUrl = urlData.publicUrl;
+            }
+          } else {
+            const { error: uploadError } = await supabaseClient.storage.from("images").upload(imagePath, fileBuffer, { contentType: cleanContentType, upsert: true });
+            if (uploadError) throw uploadError;
+            const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(imagePath);
+            savedImageUrl = urlData.publicUrl;
+          }
 
-          try {
-            // Kiểm tra trùng lặp tránh tải lặp
-            addUrlLog(`🔍 Đang kiểm tra trùng lặp...`);
-            const { data: duplicateCheck } = await supabaseClient
-              .from("prompts")
-              .select("id, notes")
-              .eq("user_id", userId)
-              .eq("type", "video")
-              .like("notes", `%${url}%`);
+          // 4. Lưu ảnh vào Supabase Database bảng `images`
+          const title = fileName.replace(/\.[^/.]+$/, "");
+          const now = new Date().toISOString();
+          
+          const { error: dbError } = await supabaseClient.from("images").insert({
+            id: imageId,
+            title: title,
+            imageUrl: savedImageUrl,
+            thumbnailUrl: savedImageUrl, // dùng luôn ảnh gốc làm thumbnail
+            promptId: null,
+            prompt: meta.prompt || "",
+            negativePrompt: meta.negativePrompt || "",
+            model: meta.model || "Drive Sync",
+            lora: meta.lora || "",
+            seed: meta.seed || "",
+            sampler: meta.sampler || "",
+            cfgScale: meta.cfgScale !== undefined ? meta.cfgScale : 7,
+            steps: meta.steps !== undefined ? meta.steps : 20,
+            creator: meta.creator || "Drive Sync",
+            note: `Đồng bộ từ file Google Drive "${fileName}"`,
+            width: dimensions.width,
+            height: dimensions.height,
+            fileSize: fileBuffer.byteLength,
+            format: ext,
+            tags: ["DriveSync", ...(meta.tags || [])],
+            isFavorite: false,
+            createdAt: now,
+            user_id: userId,
+          });
 
-            let isDuplicate = false;
-            if (duplicateCheck && duplicateCheck.length > 0) {
-              for (const record of duplicateCheck) {
-                try {
-                  if (record.notes) {
-                    const parsedNotes = JSON.parse(record.notes);
-                    if (parsedNotes.videoMetadata?.originUrl === url) {
+          if (dbError) {
+            addLog(`⚠️ Lưu database ảnh thất bại: ${dbError.message}`);
+            failedCount++;
+          } else {
+            addLog(`✅ Thành công! Đã thêm ảnh "${fileName}" vào thư viện.`);
+            downloadedImagesCount++;
+            totalDownloaded++;
+            totalUrlsCount++; // Cộng vào tổng tệp xử lý
+          }
+
+        } else {
+          // Xử lý file text link video như cũ
+          const content = fileBuffer.toString("utf-8");
+
+          // Trích xuất URL từ cả nội dung file VÀ tên file
+          const contentUrls = parseUrls(content);
+          const fileNameUrls = parseUrls(fileName || "");
+          
+          // Gộp và loại trùng
+          const allUrlsSet = new Set([...contentUrls, ...fileNameUrls]);
+          const urls = Array.from(allUrlsSet);
+          totalUrlsCount += urls.length;
+          
+          addLog(`Tìm thấy ${urls.length} link video trong file "${fileName}".`);
+
+          // Định nghĩa hàm xử lý song song cho từng URL
+          const processUrl = async (url: string) => {
+            const addUrlLog = (msg: string) => {
+              const time = new Date().toLocaleTimeString();
+              const logLine = `[${time}] [Link: ${url.substring(0, 35)}...] ${msg}`;
+              console.log(`[Drive Sync] ${logLine}`);
+              syncLogs.push(logLine);
+              activeSyncLogs.push(logLine); // Đẩy trực tiếp để client polling
+            };
+
+            try {
+              // Kiểm tra trùng lặp tránh tải lặp
+              addUrlLog(`🔍 Đang kiểm tra trùng lặp...`);
+              const { data: duplicateCheck } = await supabaseClient
+                .from("prompts")
+                .select("id, notes")
+                .eq("user_id", userId)
+                .eq("type", "video")
+                .like("notes", `%${url}%`);
+
+              let isDuplicate = false;
+              if (duplicateCheck && duplicateCheck.length > 0) {
+                for (const record of duplicateCheck) {
+                  try {
+                    if (record.notes) {
+                      const parsedNotes = JSON.parse(record.notes);
+                      if (parsedNotes.videoMetadata?.originUrl === url) {
+                        isDuplicate = true;
+                        break;
+                      }
+                    }
+                  } catch {
+                    if (record.notes && record.notes.includes(url)) {
                       isDuplicate = true;
                       break;
                     }
                   }
+                }
+              }
+
+              if (isDuplicate) {
+                addUrlLog(`⏭️ Bỏ qua - Video đã tồn tại trong thư viện.`);
+                return { success: false, duplicate: true, failed: false };
+              }
+
+              addUrlLog(`🚀 Đang phân tích thông tin video...`);
+              const platform = getPlatform(url);
+              let videoData = null;
+
+              if (platform === "tiktok") {
+                videoData = await downloadViaTikWM(url);
+                if (!videoData) videoData = await downloadViaCobalt(url);
+              } else {
+                videoData = await downloadViaCobalt(url);
+              }
+
+              if (!videoData || !videoData.videoUrl) {
+                addUrlLog(`⚠️ Bỏ qua - Không thể phân tích link video.`);
+                return { success: false, duplicate: false, failed: true };
+              }
+
+              addUrlLog(`📥 Đang tải file video gốc từ nguồn...`);
+              const videoFetchResponse = await fetch(videoData.videoUrl);
+              if (!videoFetchResponse.ok) {
+                addUrlLog(`⚠️ Thất bại khi fetch file video gốc.`);
+                return { success: false, duplicate: false, failed: true };
+              }
+
+              const videoBuffer = await videoFetchResponse.arrayBuffer();
+              const videoSize = videoBuffer.byteLength;
+              
+              if (videoSize > 30 * 1024 * 1024) {
+                addUrlLog(`⚠️ Bỏ qua - Dung lượng video (${(videoSize / 1024 / 1024).toFixed(1)}MB) vượt quá giới hạn 30MB.`);
+                return { success: false, duplicate: false, failed: true };
+              }
+
+              addUrlLog(`☁️ Đang upload video lên Cloud Storage...`);
+              const videoId = crypto.randomUUID();
+              const videoPath = `videos/${userId}/${videoId}.mp4`;
+              let savedVideoUrl = "";
+
+              if (isCloudinaryConfigured) {
+                try {
+                  savedVideoUrl = await uploadToCloudinary(videoBuffer, `videos/${userId}`, "video");
                 } catch {
-                  if (record.notes && record.notes.includes(url)) {
-                    isDuplicate = true;
-                    break;
-                  }
+                  const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
+                  if (uploadError) throw uploadError;
+                  const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
+                  savedVideoUrl = urlData.publicUrl;
                 }
-              }
-            }
-
-            if (isDuplicate) {
-              addUrlLog(`⏭️ Bỏ qua - Video đã tồn tại trong thư viện.`);
-              return { success: false, duplicate: true, failed: false };
-            }
-
-            addUrlLog(`🚀 Đang phân tích thông tin video...`);
-            const platform = getPlatform(url);
-            let videoData = null;
-
-            if (platform === "tiktok") {
-              videoData = await downloadViaTikWM(url);
-              if (!videoData) videoData = await downloadViaCobalt(url);
-            } else {
-              videoData = await downloadViaCobalt(url);
-            }
-
-            if (!videoData || !videoData.videoUrl) {
-              addUrlLog(`⚠️ Bỏ qua - Không thể phân tích link video.`);
-              return { success: false, duplicate: false, failed: true };
-            }
-
-            addUrlLog(`📥 Đang tải file video gốc từ nguồn...`);
-            const videoFetchResponse = await fetch(videoData.videoUrl);
-            if (!videoFetchResponse.ok) {
-              addUrlLog(`⚠️ Thất bại khi fetch file video gốc.`);
-              return { success: false, duplicate: false, failed: true };
-            }
-
-            const videoBuffer = await videoFetchResponse.arrayBuffer();
-            const videoSize = videoBuffer.byteLength;
-            
-            if (videoSize > 30 * 1024 * 1024) {
-              addUrlLog(`⚠️ Bỏ qua - Dung lượng video (${(videoSize / 1024 / 1024).toFixed(1)}MB) vượt quá giới hạn 30MB.`);
-              return { success: false, duplicate: false, failed: true };
-            }
-
-            addUrlLog(`☁️ Đang upload video lên Cloud Storage...`);
-            const videoId = crypto.randomUUID();
-            const videoPath = `videos/${userId}/${videoId}.mp4`;
-            let savedVideoUrl = "";
-
-            if (isCloudinaryConfigured) {
-              try {
-                savedVideoUrl = await uploadToCloudinary(videoBuffer, `videos/${userId}`, "video");
-              } catch {
+              } else if (isR2Configured) {
+                try {
+                  savedVideoUrl = await uploadToR2(videoPath, videoBuffer, "video/mp4");
+                } catch {
+                  const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
+                  if (uploadError) throw uploadError;
+                  const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
+                  savedVideoUrl = urlData.publicUrl;
+                }
+              } else {
                 const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
                 if (uploadError) throw uploadError;
                 const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
                 savedVideoUrl = urlData.publicUrl;
               }
-            } else if (isR2Configured) {
-              try {
-                savedVideoUrl = await uploadToR2(videoPath, videoBuffer, "video/mp4");
-              } catch {
-                const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
-                if (uploadError) throw uploadError;
-                const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
-                savedVideoUrl = urlData.publicUrl;
-              }
-            } else {
-              const { error: uploadError } = await supabaseClient.storage.from("images").upload(videoPath, videoBuffer, { contentType: "video/mp4", upsert: true });
-              if (uploadError) throw uploadError;
-              const { data: urlData } = supabaseClient.storage.from("images").getPublicUrl(videoPath);
-              savedVideoUrl = urlData.publicUrl;
-            }
 
-            // Tải & Upload Thumbnail
-            let savedThumbnailUrl = "";
-            if (videoData.thumbnailUrl) {
-              addUrlLog(`🖼️ Đang tải và upload ảnh thu nhỏ (thumbnail)...`);
-              try {
-                const thumbResponse = await fetch(videoData.thumbnailUrl);
-                if (thumbResponse.ok) {
-                  const thumbBuffer = await thumbResponse.arrayBuffer();
-                  const thumbPath = `videos/${userId}/thumbs/${videoId}.jpg`;
+              // Tải & Upload Thumbnail
+              let savedThumbnailUrl = "";
+              if (videoData.thumbnailUrl) {
+                addUrlLog(`🖼️ Đang tải và upload ảnh thu nhỏ (thumbnail)...`);
+                try {
+                  const thumbResponse = await fetch(videoData.thumbnailUrl);
+                  if (thumbResponse.ok) {
+                    const thumbBuffer = await thumbResponse.arrayBuffer();
+                    const thumbPath = `videos/${userId}/thumbs/${videoId}.jpg`;
 
-                  if (isCloudinaryConfigured) {
-                    try {
-                      savedThumbnailUrl = await uploadToCloudinary(thumbBuffer, `videos/${userId}/thumbs`, "image");
-                    } catch {
+                    if (isCloudinaryConfigured) {
+                      try {
+                        savedThumbnailUrl = await uploadToCloudinary(thumbBuffer, `videos/${userId}/thumbs`, "image");
+                      } catch {
+                        const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
+                        if (!thumbError) {
+                          const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
+                          savedThumbnailUrl = thumbUrlData.publicUrl;
+                        }
+                      }
+                    } else if (isR2Configured) {
+                      try {
+                        savedThumbnailUrl = await uploadToR2(thumbPath, thumbBuffer, "image/jpeg");
+                      } catch {
+                        const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
+                        if (!thumbError) {
+                          const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
+                          savedThumbnailUrl = thumbUrlData.publicUrl;
+                        }
+                      }
+                    } else {
                       const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
                       if (!thumbError) {
                         const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
                         savedThumbnailUrl = thumbUrlData.publicUrl;
                       }
                     }
-                  } else if (isR2Configured) {
-                    try {
-                      savedThumbnailUrl = await uploadToR2(thumbPath, thumbBuffer, "image/jpeg");
-                    } catch {
-                      const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
-                      if (!thumbError) {
-                        const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
-                        savedThumbnailUrl = thumbUrlData.publicUrl;
-                      }
-                    }
-                  } else {
-                    const { error: thumbError } = await supabaseClient.storage.from("images").upload(thumbPath, thumbBuffer, { contentType: "image/jpeg", upsert: true });
-                    if (!thumbError) {
-                      const { data: thumbUrlData } = supabaseClient.storage.from("images").getPublicUrl(thumbPath);
-                      savedThumbnailUrl = thumbUrlData.publicUrl;
-                    }
                   }
+                } catch (thumbErr) {
+                  console.error("Fail to sync thumb:", thumbErr);
                 }
-              } catch (thumbErr) {
-                console.error("Fail to sync thumb:", thumbErr);
               }
-            }
 
-            addUrlLog(`💾 Đang ghi nhận thông tin video vào Database...`);
-            const now = new Date().toISOString();
-            const videoMetadata = {
-              id: videoId,
-              videoUrl: savedVideoUrl,
-              thumbnailUrl: savedThumbnailUrl || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500",
-              originUrl: url,
-              platform: platform,
-              duration: videoData.duration || 0,
-              creator: videoData.creator,
-            };
-            const finalNotes = JSON.stringify({ notes: `Đồng bộ từ file Google Drive "${fileName}"`, videoMetadata });
+              addUrlLog(`💾 Đang ghi nhận thông tin video vào Database...`);
+              const now = new Date().toISOString();
+              const videoMetadata = {
+                id: videoId,
+                videoUrl: savedVideoUrl,
+                thumbnailUrl: savedThumbnailUrl || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500",
+                originUrl: url,
+                platform: platform,
+                duration: videoData.duration || 0,
+                creator: videoData.creator,
+              };
+              const finalNotes = JSON.stringify({ notes: `Đồng bộ từ file Google Drive "${fileName}"`, videoMetadata });
 
-            const { error: dbError } = await supabaseClient.from("prompts").insert({
-              id: videoId,
-              title: videoData.title || `Video Drive Sync - ${videoData.creator}`,
-              content: "Đồng bộ tự động từ Google Drive",
-              negativePrompt: "",
-              type: "video",
-              model: "Drive Sync",
-              lora: "",
-              seed: "",
-              sampler: "",
-              cfgScale: 0,
-              steps: 0,
-              creator: videoData.creator,
-              tags: ["SnapSave", "DriveSync", platform],
-              notes: finalNotes,
-              isFavorite: false,
-              createdAt: now,
-              updatedAt: now,
-              user_id: userId,
-            });
+              const { error: dbError } = await supabaseClient.from("prompts").insert({
+                id: videoId,
+                title: videoData.title || `Video Drive Sync - ${videoData.creator}`,
+                content: "Đồng bộ tự động từ Google Drive",
+                negativePrompt: "",
+                type: "video",
+                model: "Drive Sync",
+                lora: "",
+                seed: "",
+                sampler: "",
+                cfgScale: 0,
+                steps: 0,
+                creator: videoData.creator,
+                tags: ["SnapSave", "DriveSync", platform],
+                notes: finalNotes,
+                isFavorite: false,
+                createdAt: now,
+                updatedAt: now,
+                user_id: userId,
+              });
 
-            if (dbError) {
-              addUrlLog(`⚠️ Lưu database thất bại: ${dbError.message}`);
+              if (dbError) {
+                addUrlLog(`⚠️ Lưu database thất bại: ${dbError.message}`);
+                return { success: false, duplicate: false, failed: true };
+              }
+
+              addUrlLog(`✅ Thành công! Video đã sẵn sàng trong thư viện.`);
+              return { success: true, duplicate: false, failed: false };
+
+            } catch (urlErr: any) {
+              addUrlLog(`❌ Lỗi khi xử lý link: ${urlErr.message}`);
               return { success: false, duplicate: false, failed: true };
             }
+          };
 
-            addUrlLog(`✅ Thành công! Video đã sẵn sàng trong thư viện.`);
-            return { success: true, duplicate: false, failed: false };
-
-          } catch (urlErr: any) {
-            addUrlLog(`❌ Lỗi khi xử lý link: ${urlErr.message}`);
-            return { success: false, duplicate: false, failed: true };
+          // Chạy song song toàn bộ URL của file
+          const results = await Promise.all(urls.map(processUrl));
+          
+          // Tổng hợp kết quả đếm
+          for (const res of results) {
+            if (res.success) {
+              downloadedVideosCount++;
+              totalDownloaded++;
+            }
+            else if (res.duplicate) duplicateCount++;
+            else if (res.failed) failedCount++;
           }
-        };
-
-        // Chạy song song toàn bộ URL của file
-        const results = await Promise.all(urls.map(processUrl));
-        
-        // Tổng hợp kết quả đếm
-        for (const res of results) {
-          if (res.success) totalDownloaded++;
-          else if (res.duplicate) duplicateCount++;
-          else if (res.failed) failedCount++;
         }
 
         // Xóa tệp tin trên Google Drive sau khi xử lý thành công
@@ -598,15 +729,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    addLog(`Đồng bộ Google Drive hoàn tất. Tổng số video đã tải về: ${totalDownloaded}`);
+    addLog(`Đồng bộ Google Drive hoàn tất. Tổng số tệp đã tải về/nhập: ${totalDownloaded}`);
     isSyncActive = false;
 
     return NextResponse.json({
       success: true,
-      message: `Đồng bộ hoàn tất. Phát hiện ${totalUrlsCount} link. Đã tải thành công ${totalDownloaded} video, lỗi ${failedCount} link, bỏ qua ${duplicateCount} link trùng.`,
+      message: `Đồng bộ hoàn tất. Phát hiện ${totalUrlsCount} link/tệp ảnh. Đã tải thành công ${downloadedVideosCount} video và ${downloadedImagesCount} ảnh, lỗi ${failedCount} tệp, bỏ qua ${duplicateCount} tệp trùng.`,
       logs: syncLogs,
       totalCount: totalUrlsCount,
       downloadedCount: totalDownloaded,
+      downloadedVideosCount: downloadedVideosCount,
+      downloadedImagesCount: downloadedImagesCount,
       failedCount: failedCount,
       duplicateCount: duplicateCount,
     });

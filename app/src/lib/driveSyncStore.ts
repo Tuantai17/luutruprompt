@@ -7,6 +7,8 @@ export interface SyncNotification {
   message: string;
   totalCount: number;
   successCount: number;
+  downloadedVideosCount?: number;
+  downloadedImagesCount?: number;
   failedCount: number;
   duplicateCount: number;
 }
@@ -91,6 +93,8 @@ export const useDriveSyncStore = create<DriveSyncState>((set, get) => ({
 
       const total = data.totalCount || 0;
       const success = data.downloadedCount || 0;
+      const successVideos = data.downloadedVideosCount || 0;
+      const successImages = data.downloadedImagesCount || 0;
       const failed = data.failedCount || 0;
       const duplicate = data.duplicateCount || 0;
 
@@ -142,6 +146,8 @@ export const useDriveSyncStore = create<DriveSyncState>((set, get) => ({
             message: `Đồng bộ Drive hoàn tất!`,
             totalCount: total,
             successCount: success,
+            downloadedVideosCount: successVideos,
+            downloadedImagesCount: successImages,
             failedCount: failed,
             duplicateCount: duplicate,
           },

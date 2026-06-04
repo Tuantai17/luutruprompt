@@ -121,6 +121,7 @@ const DownloaderPage = () => {
   const [downloadHistory, setDownloadHistory] = useState<DownloadResult[]>([]);
   const [lightboxVideo, setLightboxVideo] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const terminalRef = useRef<HTMLDivElement>(null);
 
   // States & hàm xử lý quản lý lịch sử tải
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([]);
@@ -192,6 +193,13 @@ const DownloaderPage = () => {
       fetchLatestHistory();
     }
   }, [lastSyncTime, currentUserId]);
+
+  // Tự động cuộn logs xuống dưới cùng khi có log mới
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [syncLogs]);
 
   // Hàm load lịch sử tải từ database Supabase (bảng prompts)
   const fetchLatestHistory = async (userIdStr?: string) => {
@@ -943,6 +951,7 @@ const DownloaderPage = () => {
                 Nhật ký hoạt động (Live Logs):
               </span>
               <div
+                ref={terminalRef}
                 style={{
                   width: "100%",
                   height: 180,

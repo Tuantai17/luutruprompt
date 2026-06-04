@@ -111,11 +111,20 @@ export const db = {
         .eq("user_id", userId)
         .order("createdAt", { ascending: false });
       if (error) throw error;
-      return (data || []).map(row => ({
-        ...row,
-        createdAt: new Date(row.createdAt),
-        updatedAt: new Date(row.updatedAt)
-      }));
+      return (data || [])
+        .filter(row => {
+          const isDriveSyncVideo = row.type === "video" && (
+            row.tags?.includes("DriveSync") ||
+            row.tags?.includes("SnapSave") ||
+            row.notes?.includes("videoMetadata")
+          );
+          return !isDriveSyncVideo;
+        })
+        .map(row => ({
+          ...row,
+          createdAt: new Date(row.createdAt),
+          updatedAt: new Date(row.updatedAt)
+        }));
     },
     orderBy: (field: string) => {
       return {
@@ -130,11 +139,20 @@ export const db = {
                 .eq("user_id", userId)
                 .order(field === "createdAt" ? "createdAt" : field, { ascending: false });
               if (error) throw error;
-              return (data || []).map(row => ({
-                ...row,
-                createdAt: new Date(row.createdAt),
-                updatedAt: new Date(row.updatedAt)
-              }));
+              return (data || [])
+                .filter(row => {
+                  const isDriveSyncVideo = row.type === "video" && (
+                    row.tags?.includes("DriveSync") ||
+                    row.tags?.includes("SnapSave") ||
+                    row.notes?.includes("videoMetadata")
+                  );
+                  return !isDriveSyncVideo;
+                })
+                .map(row => ({
+                  ...row,
+                  createdAt: new Date(row.createdAt),
+                  updatedAt: new Date(row.updatedAt)
+                }));
             }
           };
         }

@@ -179,6 +179,11 @@ const AppShell = ({ children }: { children: React.ReactNode }) => {
             >
               <div>Tổng số link: <strong style={{ color: "var(--text-primary)" }}>{notification.totalCount}</strong></div>
               <div>Thành công: <strong style={{ color: "var(--accent-green)" }}>{notification.successCount}</strong></div>
+              {(notification.downloadedVideosCount !== undefined || notification.downloadedImagesCount !== undefined) && (
+                <div style={{ gridColumn: "span 2", fontSize: 10.5, color: "rgba(255,255,255,0.4)", borderTop: "1px dashed rgba(255,255,255,0.08)", borderBottom: "1px dashed rgba(255,255,255,0.08)", padding: "4px 0", margin: "2px 0" }}>
+                  Tải về: <span style={{ color: "var(--accent-cyan)" }}>{notification.downloadedVideosCount || 0} video</span> • <span style={{ color: "var(--accent-pink)" }}>{notification.downloadedImagesCount || 0} ảnh</span>
+                </div>
+              )}
               <div>Lỗi tải: <strong style={{ color: "var(--accent-red)" }}>{notification.failedCount}</strong></div>
               <div>Trùng lặp: <strong style={{ color: "var(--text-muted)" }}>{notification.duplicateCount}</strong></div>
             </div>

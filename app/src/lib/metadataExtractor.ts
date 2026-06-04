@@ -413,6 +413,33 @@ const parseJPEGMetadata = (arrayBuffer: ArrayBuffer): Partial<ExtractedMetadata>
 };
 
 /**
+ * Extract metadata directly from a raw image buffer (useful for Server-side environments).
+ */
+export const parseImageBufferMetadata = (buffer: ArrayBuffer, fileName: string): Partial<ExtractedMetadata> => {
+  try {
+    const ext = fileName.toLowerCase().split(".").pop() || "";
+    if (ext === "png") {
+      return parsePNGMetadata(buffer);
+    } else if (ext === "jpg" || ext === "jpeg") {
+      return parseJPEGMetadata(buffer);
+    } else {
+      // WEBP or other fallback
+      const rawString = arrayBufferToString(buffer);
+      if (rawString.includes("Steps:")) {
+        const stepsIndex = rawString.indexOf("Steps:");
+        const startIndex = Math.max(0, stepsIndex - 4000);
+        const endIndex = Math.min(rawString.length, stepsIndex + 1000);
+        const candidateText = rawString.substring(startIndex, endIndex);
+        return parseA1111Parameters(candidateText);
+      }
+    }
+  } catch (err) {
+    console.error("Error in parseImageBufferMetadata:", err);
+  }
+  return {};
+};
+
+/**
  * Main function to extract metadata from an uploaded image File.
  */
 export const extractMetadata = async (file: File): Promise<Partial<ExtractedMetadata>> => {
