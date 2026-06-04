@@ -135,7 +135,7 @@ const PromptsPage = () => {
   if (!mounted) return null;
 
   return (
-    <div className="animate-fadeIn" style={{ maxWidth: 1400, margin: "0 auto" }}>
+    <div className="animate-fadeIn" style={{ maxWidth: 1200, margin: "0 auto", padding: "0 16px 60px" }}>
       {/* Header */}
       <div
         style={{
@@ -348,8 +348,8 @@ const PromptsPage = () => {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
-            gap: 16,
+            gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+            gap: 20,
           }}
         >
           {filteredPrompts.map((prompt, idx) => (
