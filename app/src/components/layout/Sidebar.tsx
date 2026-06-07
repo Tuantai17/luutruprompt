@@ -21,6 +21,7 @@ import {
   LogOut,
   Download,
   Film,
+  Wand2,
 } from "lucide-react";
 
 const navItems = [
@@ -32,6 +33,7 @@ const navItems = [
   { href: "/videos", icon: Film, label: "Lưu trữ Video" },
   { href: "/workflows", icon: Workflow, label: "Workflow" },
   { href: "/import", icon: FileUp, label: "Nhập dữ liệu" },
+  { href: "/ai-image", icon: Wand2, label: "Tạo ảnh AI" },
   { href: "/search", icon: Search, label: "Tìm kiếm" },
   { href: "/favorites", icon: Heart, label: "Yêu thích" },
   { href: "/settings", icon: Settings, label: "Cài đặt" },
